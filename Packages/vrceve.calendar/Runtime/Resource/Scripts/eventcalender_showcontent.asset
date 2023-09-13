@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c333ccfdd0cbdbc4ca30cef2dd6e6b9b, type: 3}
   m_Name: eventcalender_showcontent
   m_EditorClassIdentifier: 
-  serializedUdonProgramAsset: {fileID: 11400000, guid: 8f3c5a6920043db4088237d1030ceae7,
+  serializedUdonProgramAsset: {fileID: 11400000, guid: afb462300cdbe2140b2f2f4da6c421f9,
     type: 2}
   udonAssembly: 
   assemblyError: 
@@ -116,7 +116,7 @@ MonoBehaviour:
       Data: 6|System.RuntimeType, mscorlib
     - Name: 
       Entry: 1
-      Data: cuckoo_VRChatEventCalendar_v3, Assembly-CSharp
+      Data: cuckoo_VRChatEventCalendar_v3, vrceve.calendar
     - Name: 
       Entry: 8
       Data: 
