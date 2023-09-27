@@ -202,7 +202,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// イベントのリストを表示する最初のポジション
     /// ここからどんどん足してく
     /// </summary>
-    Vector2 DefaultPositionDayRect = new Vector2(491f, -22.6001f);
+    Vector2 DefaultPositionDayRect = new Vector2(491f, -25.0f);
 
     /// <summary>
     /// スクリプト開始時

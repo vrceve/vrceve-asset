@@ -1,7 +1,7 @@
 {
   "name": "vrceve.calendar",
   "displayName": "VRChat\u30a4\u30d9\u30f3\u30c8\u30ab\u30ec\u30f3\u30c0\u30fc",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "VRChat Event Calendar for VPM",
   "gitDependencies": {},
   "vpmDependencies": {
