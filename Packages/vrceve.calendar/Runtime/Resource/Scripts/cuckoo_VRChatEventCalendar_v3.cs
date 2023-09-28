@@ -1370,7 +1370,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     [CustomEditor(typeof(cuckoo_VRChatEventCalendar_v3))]
-    public class cuckoo_VRChatEventCalender_v2_Editor : UnityEditor.Editor
+    public class cuckoo_VRChatEventCalender_v3_Editor : UnityEditor.Editor
     {
         private Texture InspectorView_Logo_Texture;
         private const string InspectorView_Logo_guid = "3fd29cc1c649cff41ac6fe3d81087ade";
