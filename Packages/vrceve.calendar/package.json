@@ -2,10 +2,13 @@
   "name": "vrceve.calendar",
   "displayName": "VRChat\u30a4\u30d9\u30f3\u30c8\u30ab\u30ec\u30f3\u30c0\u30fc",
   "version": "1.0.3",
+  "unity" : "2019.4",
   "description": "VRChat Event Calendar for VPM",
   "gitDependencies": {},
   "vpmDependencies": {
-    "com.vrchat.udonsharp": "1.1.9"
+    "com.vrchat.base" : ">3.3.0",
+    "com.vrchat.worlds" : ">3.3.0",
+    "com.vrchat.udonsharp": ">1.1.9"
   },
   "author": {
     "name": "satania",
@@ -15,6 +18,5 @@
   "legacyFolders": {},
   "legacyFiles": {},
   "localPath": "",
-  "type": "UdonSript",
-  "unity": "2019.4"
+  "type": "UdonSript"
 }
