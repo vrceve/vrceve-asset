@@ -6,9 +6,9 @@
   "description": "VRChat Event Calendar for VPM",
   "gitDependencies": {},
   "vpmDependencies": {
-    "com.vrchat.base" : ">3.3.0",
-    "com.vrchat.worlds" : ">3.3.0",
-    "com.vrchat.udonsharp": ">1.1.9"
+    "com.vrchat.base" : ">=3.3.0",
+    "com.vrchat.worlds" : ">=3.3.0",
+    "com.vrchat.udonsharp": ">=1.1.9"
   },
   "author": {
     "name": "satania",
