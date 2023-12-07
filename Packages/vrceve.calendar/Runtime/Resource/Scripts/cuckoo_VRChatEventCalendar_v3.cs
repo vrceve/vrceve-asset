@@ -14,6 +14,7 @@ using UnityEditor;
 using UdonSharpEditor;
 #endif
 
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 {
     /// <summary>
@@ -1201,7 +1202,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
                 text.text = "PC";
                 if (quests[index])
-                    text.text = text.text + ", Quest";
+                    text.text = text.text + ", Android";
             }
             else if (text.name == "Author")
             {
@@ -1290,11 +1291,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         if (questToggle.isOn)
         {
-            DebugLog($"Toggled on quest mode");
+            DebugLog($"Toggled on android mode");
         }
         else
         {
-            DebugLog($"Toggled off quest mode");
+            DebugLog($"Toggled off android mode");
         }
     }
 
@@ -1475,6 +1476,57 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             UdonSharpGUI.DrawUtilities(target);
             serializedObject.ApplyModifiedProperties();
             EditorGUI.indentLevel--;
+        }
+    }
+
+    public class cuckoo_VRChatEventCalender_V3_Tool : EditorWindow
+    {
+        private static void DebugLog(string msg = "", string color = "yellow", string title = "VRChatイベントカレンダー")
+        {
+            Debug.Log($"[<color={color}>{title}</color>]{msg}");
+        }
+
+        #region variable
+        static string guid_prefab = "b9fbc0b476d953349adad81fe030abb3";
+        #endregion
+
+        #region Func
+        private static bool isStringEmptyOrDontExists(string path)
+        {
+            return string.IsNullOrEmpty(path) || !System.IO.File.Exists(path);
+        }
+
+        private static GameObject GetPrefabFromGUID(string guid, string path = "")
+        {
+            string _path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(_path))
+            {
+                //guid、path両方から取得出来ない場合は返す
+                if (isStringEmptyOrDontExists(path))
+                    return null;
+
+                _path = path;
+            }
+
+            return AssetDatabase.LoadAssetAtPath<GameObject>(_path);
+        }
+        #endregion
+
+        [MenuItem("VRChatイベントカレンダー/プレハブ設置")]
+        private static void SetupPrefab()
+        {
+            GameObject prefab = GetPrefabFromGUID(guid_prefab, "Packages/vrceve.calendar/Runtime/VRC_event_calendar v3.prefab");
+            if (prefab == null)
+            {
+                DebugLog("PrefabがPackages内に存在しません。\nVRChatイベントカレンダーの再配置を行ってください。", "red");
+                return;
+            }
+
+            GameObject panel = Instantiate(prefab);
+            panel.name = prefab.name;
+            EditorGUIUtility.PingObject(panel);
+
+            DebugLog("設置しました！", "green");
         }
     }
 #endif
