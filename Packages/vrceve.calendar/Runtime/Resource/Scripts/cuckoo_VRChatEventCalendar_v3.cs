@@ -542,6 +542,49 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         return splitedArray;
     }
 
+    #region Test
+    public bool IsOverlapping(RectTransform rect1, RectTransform rect2)
+    {
+        var rect1Corners = new Vector3[4];
+        var rect2Corners = new Vector3[4];
+
+        rect1.GetWorldCorners(rect1Corners);
+        rect2.GetWorldCorners(rect2Corners);
+
+        for (var i = 0; i < 4; i++)
+        {
+            if (IsPointInsideRect(rect1Corners[i], rect2Corners))
+            {
+                return true;
+            }
+
+            if (IsPointInsideRect(rect2Corners[i], rect1Corners))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsPointInsideRect(Vector3 point, Vector3[] rectCorners)
+    {
+        var inside = false;
+
+        //rectCornersの各頂点に対して、pointがrect内にあるかを確認
+        for (int i = 0, j = 3; i < 4; j = i++)
+        {
+            if (((rectCorners[i].y > point.y) != (rectCorners[j].y > point.y)) &&
+                (point.x < (rectCorners[j].x - rectCorners[i].x) * (point.y - rectCorners[i].y) / (rectCorners[j].y - rectCorners[i].y) + rectCorners[i].x))
+            {
+                inside = !inside;
+            }
+        }
+
+        return inside;
+    }
+    #endregion
+
     /// <summary>
     /// ボタンの位置を初期位置へ(見えないところへ移動してる)
     /// </summary>
@@ -571,7 +614,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             //RectTransformとして取得 (as RectTransformは構文エラーになる)
             RectTransform dayHeaderRectTransform = dayHeader.GetComponent<RectTransform>();
 
-            dayHeaderRectTransform.localPosition = dayHeaderPosition;
+            if (dayHeaderRectTransform != null)
+                dayHeaderRectTransform.localPosition = dayHeaderPosition;
+
+            //DeativeImage deativeImage = dayHeader.GetComponent<DeativeImage>();
+            //if (deativeImage != null)
+            //    deativeImage.ToggleImage(false);
         }
 
         for (int i = 0; i < 256; i++)
@@ -585,9 +633,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             RectTransform rectTransform = rect.GetComponent<RectTransform>();
             if (rectTransform != null)
-            {
                 rectTransform.localPosition = dayHeaderPosition;
-            }
+
+            //DeativeImage deativeImage = rect.GetComponent<DeativeImage>();
+            //if (deativeImage != null)
+            //    deativeImage.ToggleImage(false);
         }
     }
 
@@ -941,7 +991,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 if (genreFilters.IndexOf(genreName) == -1)
                     genreFilters.Add(genreName);
             }
-
 
             checkbox.gameObject.SetActive(true);
             checkbox_text.text = $"{genreName} ({genreCount})";
