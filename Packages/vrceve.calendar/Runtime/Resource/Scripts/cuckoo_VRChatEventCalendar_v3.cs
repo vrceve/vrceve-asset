@@ -18,6 +18,16 @@ using UdonSharpEditor;
 public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 {
     /// <summary>
+    /// Udon Debugに出力する時に見やすいように
+    /// </summary>
+    /// <param name="text"></param>
+    private void DebugLog(string text)
+    {
+        Debug.Log($"[<color=yellow>VRChatEventCalender_v3</color>]{text}");
+    }
+
+    #region Variables
+    /// <summary>
     /// 初期化中ならTrue
     /// </summary>
     private bool isReloading;
@@ -114,6 +124,16 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     [SerializeField] RectTransform Filter;
 
     /// <summary>
+    /// イベントの詳細を表示するパネル
+    /// </summary>
+    [SerializeField] RectTransform contentPanelRect;
+
+    /// <summary>
+    /// イベントの説明をいれるテキスト
+    /// </summary>
+    [SerializeField] Text _Day, _Time, _Title, _Quest, _Author, _Body, _Genre, _Conditions, _Way, _Note;
+
+    /// <summary>
     /// Jsonから与えられる時間のフォーマット 例: 2023-06-29T22:00:00.000
     /// </summary>
     string format = "yyyy-MM-ddTHH:mm:ss.fff";
@@ -204,7 +224,25 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// ここからどんどん足してく
     /// </summary>
     Vector2 DefaultPositionDayRect = new Vector2(491f, -25.0f);
+ 
+    RectTransform[] dayHeaders = new RectTransform[10];
+    RectTransform[] eventButtons = new RectTransform[256];
+    eventcalendar_showcontent[] eventButtonScripts = new eventcalendar_showcontent[256];
 
+    Text[] dayHeaderTexts = new Text[10];
+    Text[] eventButtonTexts = new Text[256];
+
+    Text[] eventButtonTimeTexts = new Text[256];
+
+    int checkboxLen = 0;
+    eventcalendar_checkbox[] checkboxes = new eventcalendar_checkbox[16];
+    Text[] checkboxTexts = new Text[16];
+
+    bool isOverlapChecking = false;
+    float checkOverlapCooltime = 0.0f;
+    #endregion
+
+    #region Internal Func
     /// <summary>
     /// スクリプト開始時
     /// </summary>
@@ -223,8 +261,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //最初にリセットしておく
         ResetButton();
 
+        GetEventFields();
+
         //フィルタをリセット
-        InitializeFilter();
+        InitializeFields();
+
+        //ループ開始
+        UpdateLoop();
     }
 
     /// <summary>
@@ -239,7 +282,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <summary>
     /// ループ、300秒に1回更新が入る
     /// </summary>
-    void Update()
+    public void UpdateLoop()
     {
         //読み込み (初回のみ7秒)
         currentTime += Time.deltaTime;
@@ -247,7 +290,39 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         {
             reloadCal();
         }
+
+        #region Overlap CheckLoop
+        if (checkOverlapCooltime > 0)
+            checkOverlapCooltime -= Time.deltaTime;
+
+        if (0 >= checkOverlapCooltime && isOverlapChecking)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                if (dayHeaders[i] == null)
+                    continue;
+
+                dayHeaders[i].gameObject.SetActive(IsOverlapping(dayHeaders[i], _scrollRect.viewport));
+                //dayHeaders[i].gameObject.SetActive(IsVisibleInViewport(dayHeaders[i], _scrollRect.viewport));
+            }
+
+            for (int i = 0; i < 256; i++)
+            {
+                if (eventButtons[i] == null)
+                    continue;
+
+                eventButtons[i].gameObject.SetActive(IsOverlapping(eventButtons[i], _scrollRect.viewport));
+                //eventButtons[i].gameObject.SetActive(IsVisibleInViewport(eventButtons[i], _scrollRect.viewport));
+            }
+
+            checkOverlapCooltime = 0.3f;
+            isOverlapChecking = false;
+        }
+        #endregion
+
+        SendCustomEventDelayedSeconds(nameof(UpdateLoop), 0.01f);
     }
+    #endregion
 
     /// <summary>
     /// クリック時に更新
@@ -258,6 +333,33 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         reloadStep = 0;
     }
 
+    #region Optimize Func
+
+    public static Rect GetWorldRect(RectTransform rectTransform)
+    {
+        Vector3[] corners = new Vector3[4];
+        rectTransform.GetWorldCorners(corners);
+
+        Vector3 position = corners[0];
+
+        Vector2 size = new Vector2(
+            rectTransform.lossyScale.x * rectTransform.rect.size.x,
+            rectTransform.lossyScale.y * rectTransform.rect.size.y);
+
+        return new Rect(position, size);
+    }
+
+    public bool IsOverlapping(RectTransform rectTransform1, RectTransform rectTransform2)
+    {
+        Rect rect1 = GetWorldRect(rectTransform1);
+        Rect rect2 = GetWorldRect(rectTransform2);
+
+        return rect1.Overlaps(rect2);
+    }
+ 
+    #endregion
+
+    #region DateTime Func
     /// <summary>
     /// 与えられたjsonからDateTimeに変換
     /// </summary>
@@ -276,61 +378,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //日付を変換
         string _time = timeStr.Substring(0, _Plus);
         time = DateTime.ParseExact(_time, format, null);
-    }
-
-    /// <summary>
-    /// 更新時に呼ばれる関数、更新時だけNOWLOADINGを表示
-    /// </summary>
-    public void reloadCal()
-    {
-        //エラーが起きた場合は再リロードさせる
-        DebugLog("Calling reload.");
-        if (reloadStep == 0)
-        {
-            isReloading = true;
-
-            //詳細情報を表示するボックスが表示されている場合は非表示
-            closeContentBox();
-
-            DebugLog("Reset Button Position.");
-            ResetButton();
-
-            //位置をリセット
-
-            DebugLog("Reset Event Datas.");
-            InitializeEventDatas(0);
-
-            NOWLOADING.SetActive(true);
-
-            //一度非表示にしないとマテリアルが反映されないため？ 非表示
-            HeaderImage.SetActive(false);
-
-            // ダウンロード実行
-            _task = imgDownloader.DownloadImage(
-                url_header,
-                mat_header,
-                Receiver, 
-                info);
-
-            //タイトルを取得
-            VRCStringDownloader.LoadUrl(url_json, Receiver);
-
-            //処理をdeltaTime分ずらすため？
-            reloadStep = 1;
-        }
-        else if (reloadStep == 1)
-        {
-            //非表示にしたヘッダー用オブジェクトを表示
-            HeaderImage.SetActive(true);
-
-            //Cal.SetActive(true);
-            DebugLog("Reloaded.");
-
-            //タイマーをリセット
-            reloadStep = 0;
-            currentTime = 0;
-            reloadInterval = 60 * 5; //初回以降は５分に１回更新
-        }
     }
 
     /// <summary>
@@ -402,7 +449,70 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         return timeStr;
     }
+    #endregion
 
+    /// <summary>
+    /// 更新時に呼ばれる関数、更新時だけNOWLOADINGを表示
+    /// </summary>
+    public void reloadCal()
+    {
+        //エラーが起きた場合は再リロードさせる
+        DebugLog("Calling reload.");
+        if (reloadStep == 0)
+        {
+            isReloading = true;
+
+            //詳細情報を表示するボックスが表示されている場合は非表示
+            closeContentBox();
+
+            DebugLog("Reset Button Position.");
+            ResetButton();
+
+            //位置をリセット
+
+            DebugLog("Reset Event Datas.");
+            InitializeEventDatas(0);
+
+            NOWLOADING.SetActive(true);
+
+            //一度非表示にしないとマテリアルが反映されないため？ 非表示
+            HeaderImage.SetActive(false);
+
+            // ダウンロード実行
+            _task = imgDownloader.DownloadImage(
+                url_header,
+                mat_header,
+                Receiver, 
+                info);
+
+            foreach (var dayHeader in dayHeaders)
+                dayHeader.gameObject.SetActive(false);
+
+            foreach (var eventButton in eventButtons)
+                eventButton.gameObject.SetActive(false);
+
+            //タイトルを取得
+            VRCStringDownloader.LoadUrl(url_json, Receiver);
+
+            //処理をdeltaTime分ずらすため？
+            reloadStep = 1;
+        }
+        else if (reloadStep == 1)
+        {
+            //非表示にしたヘッダー用オブジェクトを表示
+            HeaderImage.SetActive(true);
+
+            //Cal.SetActive(true);
+            DebugLog("Reloaded.");
+
+            //タイマーをリセット
+            reloadStep = 0;
+            currentTime = 0;
+            reloadInterval = 60 * 5; //初回以降は５分に１回更新
+        }
+    }
+
+    #region Funcs
     /// <summary>
     /// 生成されたIDからイベント番号を取得
     /// </summary>
@@ -542,49 +652,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         return splitedArray;
     }
 
-    #region Test
-    public bool IsOverlapping(RectTransform rect1, RectTransform rect2)
-    {
-        var rect1Corners = new Vector3[4];
-        var rect2Corners = new Vector3[4];
-
-        rect1.GetWorldCorners(rect1Corners);
-        rect2.GetWorldCorners(rect2Corners);
-
-        for (var i = 0; i < 4; i++)
-        {
-            if (IsPointInsideRect(rect1Corners[i], rect2Corners))
-            {
-                return true;
-            }
-
-            if (IsPointInsideRect(rect2Corners[i], rect1Corners))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private bool IsPointInsideRect(Vector3 point, Vector3[] rectCorners)
-    {
-        var inside = false;
-
-        //rectCornersの各頂点に対して、pointがrect内にあるかを確認
-        for (int i = 0, j = 3; i < 4; j = i++)
-        {
-            if (((rectCorners[i].y > point.y) != (rectCorners[j].y > point.y)) &&
-                (point.x < (rectCorners[j].x - rectCorners[i].x) * (point.y - rectCorners[i].y) / (rectCorners[j].y - rectCorners[i].y) + rectCorners[i].x))
-            {
-                inside = !inside;
-            }
-        }
-
-        return inside;
-    }
-    #endregion
-
     /// <summary>
     /// ボタンの位置を初期位置へ(見えないところへ移動してる)
     /// </summary>
@@ -604,40 +671,20 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         for (int i = 0; i < 10; i++)
         {
-            Transform dayHeader = Content.transform.Find($"DayHeader_{i}");
-            if (dayHeader == null)
-            {
-                DebugLog($"Could is not found DayHeaderObject [{i}]");
+            if (dayHeaders[i] == null)
                 continue;
-            }
 
-            //RectTransformとして取得 (as RectTransformは構文エラーになる)
-            RectTransform dayHeaderRectTransform = dayHeader.GetComponent<RectTransform>();
-
-            if (dayHeaderRectTransform != null)
-                dayHeaderRectTransform.localPosition = dayHeaderPosition;
-
-            //DeativeImage deativeImage = dayHeader.GetComponent<DeativeImage>();
-            //if (deativeImage != null)
-            //    deativeImage.ToggleImage(false);
+            dayHeaders[i].localPosition = dayHeaderPosition;
+            dayHeaders[i].gameObject.SetActive(false);
         }
 
         for (int i = 0; i < 256; i++)
         {
-            Transform rect = Content.Find($"{i}");
-            if (rect == null)
-            {
-                DebugLog($"Could is not found Button Object {i}");
+            if (eventButtons[i] == null)
                 continue;
-            }
 
-            RectTransform rectTransform = rect.GetComponent<RectTransform>();
-            if (rectTransform != null)
-                rectTransform.localPosition = dayHeaderPosition;
-
-            //DeativeImage deativeImage = rect.GetComponent<DeativeImage>();
-            //if (deativeImage != null)
-            //    deativeImage.ToggleImage(false);
+            eventButtons[i].localPosition = dayHeaderPosition;
+            eventButtons[i].gameObject.SetActive(false);
         }
     }
 
@@ -656,9 +703,60 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
 
         float rectHeight = DefaultPositionDayRect.y;
+
+        float rectSizeY = 0.0f;
+
         int rectNum = 0;
 
         int loopCount = datalist.Count > 10 ? 10 : datalist.Count;
+
+        for (int i = 0; i < loopCount; i++)
+        {
+            if (i >= datalist.Count)
+                break;
+
+            DataList dayToken = datalist[i].DataList;
+            DataList IDList = (DataList)dayToken[1];
+
+            rectSizeY -= 45;
+
+            for (int j = 0; j < IDList.Count; j++)
+            {
+                string id = (string)IDList[j];
+                if (string.IsNullOrEmpty(id))
+                {
+                    continue;
+                }
+
+                int index = getIndexbyID(id);
+                if (index == -1)
+                {
+                    continue;
+                }
+
+                if (genrefilters.Count > 0)
+                {
+                    if (!checkGenre(genres[index], genrefilters))
+                    {
+                        continue;
+                    }
+                }
+
+                if (isQuest && !quests[index])
+                {
+                    continue;
+                }
+
+                rectSizeY -= 30;
+            }
+
+            rectSizeY -= 10;
+        }
+
+        Vector2 test = _scrollRect.content.sizeDelta;
+        test.y = rectSizeY * -1;
+
+        _scrollRect.content.sizeDelta = test;
 
         //日付を表示するヘッダーを10個しか用意してないので10
         for (int i = 0; i < loopCount; i++)
@@ -675,37 +773,21 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
              *       |---- 日付のデータ
              *       |---- EventIDのリスト
             */
-
-            
+        
             DataList dayToken = datalist[i].DataList;
             string DayStr = (string)dayToken[0];
             DataList IDList = (DataList)dayToken[1];
 
-            Transform dayHeader = Content.transform.Find($"DayHeader_{i}");
-            if (dayHeader == null)
-            {
-                DebugLog($"Could is not found DayHeaderObject [{i}]");
-                continue;
-            }
-
-            Text textHeader = dayHeader.GetComponentInChildren<Text>();
-            if (textHeader == null)
-            {
-                DebugLog($"Could is not found text of dayHeader [{i}]");
-                continue;
-            }
-
-            //RectTransformとして取得 (as RectTransformは構文エラーになる)
-            RectTransform dayHeaderRectTransform = dayHeader.GetComponent<RectTransform>();
-            
             //規定のポジションから開始
             Vector2 dayHeaderPosition = DefaultPositionDayRect;
 
             //高さだけ計算済みの物に置き換え
             dayHeaderPosition.y = rectHeight;
 
-            dayHeaderRectTransform.localPosition = dayHeaderPosition;
-            textHeader.text = DayStr;
+            dayHeaders[i].localPosition = dayHeaderPosition;
+
+            if (dayHeaderTexts[i] != null)
+                dayHeaderTexts[i].text = DayStr;
             
             //Rect分引く
             rectHeight -= 45;
@@ -740,17 +822,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     continue;
                 }
 
-                Transform rect = Content.Find($"{rectNum}");
-                if (rect == null)
-                {
-                    DebugLog($"Could is not found Button Object {rectNum}");
-                    continue;
-                }
-
                 //次のために追加しておく
-                rectNum++;
-
-                RectTransform rectTransform = rect.GetComponent<RectTransform>();
+ 
+                RectTransform rectTransform = eventButtons[rectNum];
                 if (rectTransform != null)
                 {
                     //高さだけ計算済みの物に置き換え
@@ -761,23 +835,18 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
                 rectHeight -= 30;
 
-                eventcalendar_showcontent button = rect.GetComponentInChildren<eventcalendar_showcontent>();
-                if (button != null)
-                {
-                    button.setEventID(id);
-                }
+                eventcalendar_showcontent button = eventButtonScripts[rectNum];
+                button.setEventID(id);
 
-                Text _ButtonText = button.GetComponentInChildren<Text>();
+                Text _ButtonText = eventButtonTexts[rectNum];
                 if (_ButtonText != null)
                 {
                     _ButtonText.text = titles[index];
                 }
 
-                Transform timeRect = rect.transform.Find("TimeRect");
-                if (timeRect != null)
+                if (eventButtonTimeTexts[i] != null)
                 {
-                    Text timeText = timeRect.GetComponentInChildren<Text>();
-                    if (timeText != null)
+                    if (eventButtonTimeTexts[i] != null)
                     {
                         DateTime start = start_times[index];
                         DateTime end = end_times[index];
@@ -787,14 +856,19 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                         string format = "HH:mm";
                         DateTime endTime = start + span;
 
-                        timeText.text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
-                        //string startStr = 
+                        eventButtonTimeTexts[i].text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
                     }
                 }
+
+                eventButtons[rectNum].gameObject.SetActive(true);
+                rectNum++;
             }
 
             rectHeight -= 10;
+
+            eventButtons[rectNum].gameObject.SetActive(false);
         }
+        isOverlapChecking = true;
     }
 
     /// <summary>
@@ -937,23 +1011,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //16は最大数
         for (int i = 0; i < 16; i++)
         {
-            if (Filter == null)
-            {
-                DebugLog("Filter is not found");
+            if (checkboxes[i] == null)
                 continue;
-            }
 
-            Transform checkbox = Filter.transform.Find($"{i}");
-            if (checkbox == null)
-            {
-                DebugLog($"Genre checkbox gameObject is not found.");
-                continue;
-            }
-
-            checkbox.gameObject.SetActive(false);
+            checkboxes[i].gameObject.SetActive(false);
         }
 
-        for (int i = 0; i < genres_filterlist.Count; i++)
+        checkboxLen = genres_filterlist.Count;
+        for (int i = 0; i < checkboxLen; i++)
         {
             string genreName = (string)genres_filterlist[i];
             string genreCount = ((double)genres_eventcount[i]).ToString();
@@ -963,37 +1028,15 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 DebugLog("Filter is not found");
                 continue;
             }
-
-            Transform checkbox = Filter.transform.Find($"{i}");
-            if (checkbox == null)
-            {
-                DebugLog($"Genre checkbox gameObject is not found. {genreName}");
-                continue;
-            }
-
-            Text checkbox_text = checkbox.GetComponentInChildren<Text>();
-            if (checkbox_text == null)
-            {
-                DebugLog($"genreName checkbox Text component is not found. {genreName}");
-                continue;
-            }
-            eventcalendar_checkbox _checkbox = checkbox.GetComponent<eventcalendar_checkbox>();
-            if (_checkbox == null)
-            {
-                DebugLog($"checkbox eventcalendar_checkbox component is not found. {checkbox.name}");
-                continue;
-            }
-
-            //genres_filterToggle[i] = _checkbox.GetOn();
-
-            if (_checkbox.GetOn() && !string.IsNullOrEmpty(_checkbox.filterName))
+          
+            if (checkboxes[i].GetOn() && !string.IsNullOrEmpty(checkboxes[i].filterName))
             {
                 if (genreFilters.IndexOf(genreName) == -1)
                     genreFilters.Add(genreName);
             }
 
-            checkbox.gameObject.SetActive(true);
-            checkbox_text.text = $"{genreName} ({genreCount})";
+            checkboxes[i].gameObject.SetActive(true);
+            checkboxTexts[i].text = $"{genreName} ({genreCount})";
         }
     }
 
@@ -1018,40 +1061,19 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             string genreName = (string)genres_filterlist[i];
             string genreCount = ((double)genres_eventcount[i]).ToString();
 
-            if (Filter == null)
+            if (checkboxes[i] == null)
             {
-                DebugLog("Filter is not found");
                 continue;
             }
 
-            Transform checkbox = Filter.transform.Find($"{i}");
-            if (checkbox == null)
-            {
-                DebugLog($"Genre checkbox gameObject is not found. {genreName}");
-                continue;
-            }
+            checkboxes[i].setEventFilter(genreName);
+            checkboxes[i].toggleisON(checkBeforeFilter(genreName, genreFiltersBuf, allFiltersBuf));
 
-            Text checkbox_text = checkbox.GetComponentInChildren<Text>();
-            if (checkbox_text == null)
-            {
-                DebugLog($"genreName checkbox Text component is not found. {genreName}");
-                continue;
-            }
-            eventcalendar_checkbox _checkbox = checkbox.GetComponent<eventcalendar_checkbox>();
-            if (_checkbox == null)
-            {
-                DebugLog($"checkbox eventcalendar_checkbox component is not found. {checkbox.name}");
-                continue;
-            }
-
-            _checkbox.setEventFilter(genreName);
-            _checkbox.toggleisON(checkBeforeFilter(genreName, genreFiltersBuf, allFiltersBuf));
-
-            if (_checkbox.GetOn())
+            if (checkboxes[i].GetOn())
                 genreFilters.Add(genreName);
 
-            checkbox.gameObject.SetActive(true);
-            checkbox_text.text = $"{genreName} ({genreCount})";
+            checkboxes[i].gameObject.SetActive(true);
+            checkboxTexts[i].text = $"{genreName} ({genreCount})";
         }
     }
 
@@ -1111,6 +1133,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         isReloading = false;
     }
 
+    #region Networking Func
     /// <summary>
     /// ヘッダーイメージを読み込んだ際に成功した場合
     /// </summary>
@@ -1160,15 +1183,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         DebugLog(result.Error);
         DebugLog(result.ErrorCode.ToString());
     }
-
-    /// <summary>
-    /// Udon Debugに出力する時に見やすいように
-    /// </summary>
-    /// <param name="text"></param>
-    private void DebugLog(string text)
-    {
-        Debug.Log($"[<color=yellow>VRChatEventCalender_v3</color>]{text}");
-    }
+    #endregion
 
     /// <summary>
     /// イベントの詳細情報を表示する際に呼ばれる関数
@@ -1191,121 +1206,81 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
         }
 
-        //とりあえず、イベントの詳細表示のボックスのRectTransformを検索
-        Transform contentPanel = ContentImage.transform.Find("ContentPanel/_ScrollView/Viewport/Content");
-        RectTransform contentPanelRect = contentPanel.GetComponent<RectTransform>();
-
         //一番上から表示したいので、イベントの詳細表示のボックスの位置を一番上に
         if (contentPanelRect != null)
             contentPanelRect.localPosition = new Vector3(0, 0, 0);
 
-        //とりあえず存在するテキストコンポーネントを全て取得
-        Text[] texts = contentPanel.GetComponentsInChildren<Text>();
+        DateTime start = start_times[index];
+        DateTime end = end_times[index];
 
-        //取得したコンポーネントがついている名前から、いろんなデータを割り当てる
-        for (int i = 0; i < texts.Length; i++)
+        //開催日を記載
+        #region Day
+        string startStr = DateTimeToString(start);
+        _Day.text = startStr;
+        #endregion
+
+        //開催時間と終了時間を記載
+        #region Time
+        string format = "HH:mm";
+
+        _Time.text = $"{start.ToString(format)} ~ {end.ToString(format)}";
+        #endregion
+
+        #region Title
+        _Title.text = $"<b>{titles[index]}</b>";
+        #endregion
+
+        //対応プラットフォームを記載
+        #region Quest
+        _Quest.text = quests[index] ? "PC, Android" : "PC";
+        #endregion
+
+        //開催者を記載
+        #region Author
+        _Author.text = authors[index];
+        #endregion
+
+        //説明文を記載
+        #region Body
+        _Body.text = bodys[index];
+        #endregion
+
+        //イベントのジャンルを記載
+        #region Genre
+        //イベントのジャンルを記載
+
+        _Genre.text = "";
+        for (int j = 0; j < genres[index].Count; j++)
         {
-            Text text = texts[i];
-
-            //まあないと思うけど、止まってほしくないのでnullチェック
-            if (text == null)
+            if (genres[index][j].TokenType != TokenType.String)
                 continue;
 
-            if (text.name == "Day") 
+            string _genre = (string)genres[index][j];
+
+            if (!string.IsNullOrEmpty(_genre))
             {
-               
-                //開催日を記載
+                _Genre.text = _Genre.text + _genre;
 
-                DateTime start = start_times[index];
-                //string startStr = start.ToString("yyyy-MM-dd (ddd)");
-                string startStr = DateTimeToString(start);
-
-                if (string.IsNullOrEmpty(startStr))
-                {
-                    DebugLog($"startStr is empty. {i}");
-                    continue;
-                }
-
-                text.text = startStr;
-            }
-            else if (text.name == "Time")
-            {
-                //開催時間と終了時間を記載
-
-                DateTime start = start_times[index];
-                DateTime end = end_times[index];
-
-                string format = "HH:mm";
-
-                text.text = $"{start.ToString(format)} ~ {end.ToString(format)}";
-            }
-            else if (text.name == "Title")
-            {
-                //イベント名を記載
-
-                text.text = $"<b>{titles[index]}</b>";
-            }
-            else if (text.name == "Quest")
-            {
-                //対応プラットフォームを記載
-
-                text.text = "PC";
-                if (quests[index])
-                    text.text = text.text + ", Android";
-            }
-            else if (text.name == "Author")
-            {
-                //開催者を記載
-
-                text.text = authors[index];
-            }
-            else if (text.name == "Body")
-            {
-                //説明文を記載
-
-                text.text = bodys[index];
-            }
-            else if (text.name == "Genre")
-            {
-                //イベントのジャンルを記載
-
-                text.text = "";
-
-                for (int j = 0; j < genres[index].Count; j++)
-                {
-                    if (genres[index][j].TokenType != TokenType.String)
-                        continue;
-
-                    string _genre = (string)genres[index][j];
-
-                    if (!string.IsNullOrEmpty(_genre))
-                    {
-                        text.text = text.text + _genre;
-
-                        if (j != genres[index].Count - 1)
-                            text.text = text.text + ", ";
-                    }
-                }
-            }
-            else if (text.name == "Conditions")
-            {
-                //参加条件やモラルを記載
-
-                text.text = conditions[index];
-            }
-            else if (text.name == "Way")
-            {
-                //参加方法を記載
-
-                text.text = ways[index];
-            }
-            else if (text.name == "Note")
-            {
-                //ノートを記載
-
-                text.text = notes[index];
+                if (j != genres[index].Count - 1)
+                    _Genre.text = _Genre.text + ", ";
             }
         }
+        #endregion
+
+        //参加条件やモラルを記載
+        #region Conditions
+        _Conditions.text = conditions[index];
+        #endregion
+
+        //参加方法を記載
+        #region Way
+        _Way.text = ways[index];
+        #endregion
+
+        //ノートを記載
+        #region Note
+        _Note.text = notes[index];
+        #endregion
 
         //詳細情報のボックスを表示
         ContentImage.SetActive(true);
@@ -1348,10 +1323,87 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
     }
 
+    public void GetEventFields()
+    {
+        //規定のポジションから開始
+        Vector2 dayHeaderPosition = DefaultPositionDayRect;
+
+        //見えない位置へ移動
+        dayHeaderPosition.x = dayHeaderPosition.x + 1500;
+
+        for (int i = 0; i < 10; i++)
+        {
+            Transform dayHeader = Content.Find($"DayHeader_{i}");
+            if (dayHeader == null)
+            {
+                DebugLog($"Could is not found DayHeaderObject [{i}]");
+                continue;
+            }
+
+            //RectTransformとして取得 (as RectTransformは構文エラーになる)
+            RectTransform dayHeaderRectTransform = dayHeader.GetComponent<RectTransform>();
+            dayHeaders[i] = dayHeaderRectTransform;
+            dayHeaders[i].localPosition = dayHeaderPosition;
+
+            dayHeaderTexts[i] = dayHeaderRectTransform.GetComponentInChildren<Text>();
+        }
+
+        for (int i = 0; i < 256; i++)
+        {
+            Transform buttonTransform = Content.Find($"{i}");
+            if (buttonTransform == null)
+            {
+                DebugLog($"Could is not found Button Object {i}");
+                continue;
+            }
+
+            RectTransform buttonRectTransform = buttonTransform.GetComponent<RectTransform>();
+            eventButtons[i] = buttonRectTransform;
+            eventButtons[i].localPosition = dayHeaderPosition;
+
+            eventButtonTexts[i] = buttonRectTransform.Find("Button/Text").GetComponent<Text>();
+            eventButtonTimeTexts[i] = buttonRectTransform.Find("TimeRect/TimeText").GetComponent<Text>();
+            eventButtonScripts[i] = buttonTransform.GetComponentInChildren<eventcalendar_showcontent>();
+        }
+
+        for (int i = 0; i < 16; i++)
+        {
+            if (Filter == null)
+            {
+                DebugLog("Filter is not found");
+                continue;
+            }
+
+            Transform checkbox = Filter.transform.Find($"{i}");
+            if (checkbox == null)
+            {
+                DebugLog($"Genre checkbox gameObject is not found.");
+                continue;
+            }
+
+            eventcalendar_checkbox _checkbox = checkbox.GetComponent<eventcalendar_checkbox>();
+            if (_checkbox == null)
+            {
+                DebugLog($"checkbox eventcalendar_checkbox component is not found. {checkbox.name}");
+                continue;
+            }
+
+            Text checkbox_text = checkbox.GetComponentInChildren<Text>();
+            if (checkbox_text == null)
+            {
+                continue;
+            }
+
+            checkboxes[i] = _checkbox;
+            checkboxTexts[i] = checkbox_text;
+            checkboxes[i].gameObject.SetActive(false);
+        }
+    }
+
     /// <summary>
     /// ジャンルフィルターを初期化する関数、基本的にフィルタのToggleが変わった際にしか呼ばれない
     /// </summary>
-    public void InitializeFilter()
+    public void InitializeFields()
     {
         //とりあえずクリア
         genreFilters = new DataList();
@@ -1367,7 +1419,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
 
         //フィルタを初期化
-        InitializeFilter();
+        InitializeFields();
 
         //一回ジャンルを整理
         RefleshGenres();
@@ -1393,23 +1445,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         for (int i = 0; i < genres_filterlist.Count; i++)
         {
-            string genreName = (string)genres_filterlist[i];
-
-            Transform checkbox = Filter.transform.Find($"{i}");
-            if (checkbox == null)
-            {
-                DebugLog($"Genre checkbox gameObject is not found. {genreName}");
-                continue;
-            }
-
-            eventcalendar_checkbox _checkbox = checkbox.GetComponent<eventcalendar_checkbox>();
-            if (_checkbox == null)
-            {
-                DebugLog($"Genre eventcalendar_checkbox gameObject is not found. {genreName}");
-                continue;
-            }
-
-            _checkbox.toggleisON(false);
+            checkboxes[i].toggleisON(false);
         }
 
         isAllOFF = false;
@@ -1417,6 +1453,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //更新をかける
         toggleFilter();
     }
+    #endregion
+
+    #region uGUI Func
+    public void ViewScrolled()
+    {
+        isOverlapChecking = true;
+    }
+    #endregion
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     [CustomEditor(typeof(cuckoo_VRChatEventCalendar_v3))]
@@ -1439,6 +1483,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private SerializedProperty _ScrollRect;
         private SerializedProperty _Filter;
 
+        private SerializedProperty _ContentPanelRect;
+        private SerializedProperty _Day, _Time, _Title, _Quest, _Author, _Body, _Genre, _Conditions, _Way, _Note;
+
         public bool showDetail = true;
 
         private void OnEnable()
@@ -1455,6 +1502,18 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             _Receiver = serializedObject.FindProperty(nameof(Receiver));
             _ScrollRect = serializedObject.FindProperty(nameof(_scrollRect));
             _Filter = serializedObject.FindProperty(nameof(Filter));
+
+            _ContentPanelRect = serializedObject.FindProperty("contentPanelRect");
+            _Day = serializedObject.FindProperty("_Day");
+            _Time = serializedObject.FindProperty("_Time");
+            _Title = serializedObject.FindProperty("_Title");
+            _Quest = serializedObject.FindProperty("_Quest");
+            _Author = serializedObject.FindProperty("_Author");
+            _Body = serializedObject.FindProperty("_Body");
+            _Genre = serializedObject.FindProperty("_Genre");
+            _Conditions = serializedObject.FindProperty("_Conditions");
+            _Way = serializedObject.FindProperty("_Way");
+            _Note = serializedObject.FindProperty("_Note");
         }
         private void DrawLogoTexture(string guid, Texture texture)
         {
@@ -1517,6 +1576,23 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.Space();
             EditorGUILayout.Space();
 
+            EditorGUILayout.LabelField("Content Panel", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+            EditorGUILayout.PropertyField(_ContentPanelRect, true);
+            EditorGUILayout.PropertyField(_Day, true);
+            EditorGUILayout.PropertyField(_Time, true);
+            EditorGUILayout.PropertyField(_Title, true);
+            EditorGUILayout.PropertyField(_Quest, true);
+            EditorGUILayout.PropertyField(_Author, true);
+            EditorGUILayout.PropertyField(_Body, true);
+            EditorGUILayout.PropertyField(_Genre, true);
+            EditorGUILayout.PropertyField(_Conditions, true);
+            EditorGUILayout.PropertyField(_Way, true);
+            EditorGUILayout.PropertyField(_Note, true);
+
+            EditorGUI.indentLevel--;
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
             EditorGUILayout.LabelField("Udon Settings", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             UdonSharpGUI.DrawConvertToUdonBehaviourButton(target);

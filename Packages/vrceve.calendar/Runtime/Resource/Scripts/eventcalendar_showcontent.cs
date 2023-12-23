@@ -4,20 +4,15 @@ using UnityEngine;
 using VRC.SDKBase;
 using VRC.Udon;
 
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class eventcalendar_showcontent : UdonSharpBehaviour
 {
-    private string eventID;
+    public string eventID;
     public cuckoo_VRChatEventCalendar_v3 _eventcalender;
-
-    private void Start()
-    {
-        
-    }
 
     public void setEventID(string id)
     {
         eventID = id;
-        //Debug.Log(eventID);
     }
 
     public void drawContent()   
