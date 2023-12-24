@@ -844,20 +844,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     _ButtonText.text = titles[index];
                 }
 
-                if (eventButtonTimeTexts[i] != null)
+                if (eventButtonTimeTexts[rectNum] != null)
                 {
-                    if (eventButtonTimeTexts[i] != null)
-                    {
-                        DateTime start = start_times[index];
-                        DateTime end = end_times[index];
+                    DateTime start = start_times[index];
+                    DateTime end = end_times[index];
 
-                        TimeSpan span = end - start;
+                    TimeSpan span = end - start;
 
-                        string format = "HH:mm";
-                        DateTime endTime = start + span;
+                    string format = "HH:mm";
+                    DateTime endTime = start + span;
 
-                        eventButtonTimeTexts[i].text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
-                    }
+                    eventButtonTimeTexts[rectNum].text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
                 }
 
                 eventButtons[rectNum].gameObject.SetActive(true);
