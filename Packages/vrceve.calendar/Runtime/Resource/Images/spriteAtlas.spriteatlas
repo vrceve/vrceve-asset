@@ -1,0 +1,89 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!687078895 &4343727234628468602
+SpriteAtlas:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: spriteAtlas
+  m_EditorData:
+    serializedVersion: 2
+    textureSettings:
+      serializedVersion: 2
+      anisoLevel: 1
+      compressionQuality: 50
+      maxTextureSize: 2048
+      textureCompression: 0
+      filterMode: 1
+      generateMipMaps: 0
+      readable: 0
+      crunchedCompression: 0
+      sRGB: 1
+    platformSettings:
+    - serializedVersion: 3
+      m_BuildTarget: DefaultTexturePlatform
+      m_MaxTextureSize: 2048
+      m_ResizeAlgorithm: 0
+      m_TextureFormat: -1
+      m_TextureCompression: 1
+      m_CompressionQuality: 50
+      m_CrunchedCompression: 0
+      m_AllowsAlphaSplitting: 0
+      m_Overridden: 0
+      m_IgnorePlatformSupport: 0
+      m_AndroidETC2FallbackOverride: 0
+      m_ForceMaximumCompressionQuality_BC6H_BC7: 0
+    packingSettings:
+      serializedVersion: 2
+      padding: 4
+      blockOffset: 1
+      allowAlphaSplitting: 0
+      enableRotation: 0
+      enableTightPacking: 0
+      enableAlphaDilation: 0
+    secondaryTextureSettings: {}
+    variantMultiplier: 1
+    packables:
+    - {fileID: 2800000, guid: 6ced95e83a1bffd48b9def218c233f1f, type: 3}
+    - {fileID: 2800000, guid: 5050ea543f3df114498633d9e31270f7, type: 3}
+    - {fileID: 2800000, guid: 2fb2bb41999b37a4cacc5c1bf9c471b9, type: 3}
+    - {fileID: 2800000, guid: b06ac34ca76f63f45ba5c4170c52d0d3, type: 3}
+    - {fileID: 2800000, guid: 72ce73c673532424c8b88f9c6c9967aa, type: 3}
+    - {fileID: 2800000, guid: 519aa4bbc16b3624bb5f99e673726f40, type: 3}
+    - {fileID: 2800000, guid: b3daee7791dc6b443b3a30145c7989aa, type: 3}
+    - {fileID: 2800000, guid: e1ebedaa2181f454687209e68a221122, type: 3}
+    bindAsDefault: 1
+    isAtlasV2: 0
+    cachedData: {fileID: 0}
+    packedSpriteRenderDataKeys:
+    - 2fb2bb41999b37a4cacc5c1bf9c471b9: 21300000
+    - 5050ea543f3df114498633d9e31270f7: 21300000
+    - 72ce73c673532424c8b88f9c6c9967aa: 21300000
+    - b3daee7791dc6b443b3a30145c7989aa: 21300000
+    - 6ced95e83a1bffd48b9def218c233f1f: 21300000
+    - e1ebedaa2181f454687209e68a221122: 21300000
+    - 519aa4bbc16b3624bb5f99e673726f40: 21300000
+    - b06ac34ca76f63f45ba5c4170c52d0d3: 21300000
+  m_MasterAtlas: {fileID: 0}
+  m_PackedSprites:
+  - {fileID: 21300000, guid: 2fb2bb41999b37a4cacc5c1bf9c471b9, type: 3}
+  - {fileID: 21300000, guid: 5050ea543f3df114498633d9e31270f7, type: 3}
+  - {fileID: 21300000, guid: 72ce73c673532424c8b88f9c6c9967aa, type: 3}
+  - {fileID: 21300000, guid: b3daee7791dc6b443b3a30145c7989aa, type: 3}
+  - {fileID: 21300000, guid: 6ced95e83a1bffd48b9def218c233f1f, type: 3}
+  - {fileID: 21300000, guid: e1ebedaa2181f454687209e68a221122, type: 3}
+  - {fileID: 21300000, guid: 519aa4bbc16b3624bb5f99e673726f40, type: 3}
+  - {fileID: 21300000, guid: b06ac34ca76f63f45ba5c4170c52d0d3, type: 3}
+  m_PackedSpriteNamesToIndex:
+  - BG_white
+  - BG_Image_Footer
+  - ptlogo
+  - waku_9slice
+  - BG_Image_Day
+  - nowLoadingPCv3
+  - triangle
+  - event_bg
+  m_RenderDataMap: {}
+  m_Tag: spriteAtlas
+  m_IsVariant: 0
