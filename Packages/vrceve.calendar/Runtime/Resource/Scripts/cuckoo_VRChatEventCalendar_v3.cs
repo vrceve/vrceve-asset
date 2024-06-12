@@ -1473,9 +1473,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     [CustomEditor(typeof(cuckoo_VRChatEventCalendar_v3))]
     public class cuckoo_VRChatEventCalender_v3_Editor : UnityEditor.Editor
     {
-        private Texture InspectorView_Logo_Texture;
-        private const string InspectorView_Logo_guid = "3fd29cc1c649cff41ac6fe3d81087ade";
-
+        private Texture inspectorLogoTex;
 
         private SerializedProperty _reloadInterval;
         private SerializedProperty _NOWLOADING;
@@ -1522,12 +1520,16 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             _Way = serializedObject.FindProperty("_Way");
             _Note = serializedObject.FindProperty("_Note");
         }
-        private void DrawLogoTexture(string guid, Texture texture)
+        private void DrawLogoTexture(string guid, string path)
         {
-            if (texture == null)
+            inspectorLogoTex = AssetDatabase.LoadAssetAtPath(path, typeof(Texture)) as Texture;
+
+            if (inspectorLogoTex == null)
             {
-                texture = AssetDatabase.LoadAssetAtPath<Texture>(AssetDatabase.GUIDToAssetPath(guid));
-                return;
+                inspectorLogoTex = AssetDatabase.LoadAssetAtPath<Texture>(AssetDatabase.GUIDToAssetPath(guid));
+
+                if (inspectorLogoTex == null)
+                    return;
             }
             float w = EditorGUIUtility.currentViewWidth;
             Rect rect = new Rect
@@ -1538,14 +1540,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             Rect rect2 = GUILayoutUtility.GetRect(rect.width, rect.height);
             rect.x = ((EditorGUIUtility.currentViewWidth - rect.width) * 0.5f) - 4.0f;
             rect.y = rect2.y;
-            GUI.DrawTexture(rect, texture, ScaleMode.StretchToFill);
+            GUI.DrawTexture(rect, inspectorLogoTex, ScaleMode.StretchToFill);
         }
         public override void OnInspectorGUI()
         {
             EditorGUILayout.Space();
             EditorGUILayout.Space();
-            InspectorView_Logo_Texture = AssetDatabase.LoadAssetAtPath(AssetDatabase.GUIDToAssetPath(InspectorView_Logo_guid), typeof(Texture)) as Texture;
-            DrawLogoTexture(InspectorView_Logo_guid, InspectorView_Logo_Texture);
+            
+            DrawLogoTexture("3fd29cc1c649cff41ac6fe3d81087ade", "Packages/vrceve.calendar/Runtime/Resource/Images/InspectorView_Logo.png");
 
             EditorGUILayout.LabelField("Calendar Settings", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
@@ -1597,16 +1599,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.PropertyField(_Way, true);
             EditorGUILayout.PropertyField(_Note, true);
 
-            EditorGUI.indentLevel--;
-            EditorGUILayout.Space();
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Udon Settings", EditorStyles.boldLabel);
-            EditorGUI.indentLevel++;
-            UdonSharpGUI.DrawConvertToUdonBehaviourButton(target);
-            UdonSharpGUI.DrawProgramSource(target);
-            UdonSharpGUI.DrawSyncSettings(target);
-            UdonSharpGUI.DrawUtilities(target);
-            serializedObject.ApplyModifiedProperties();
             EditorGUI.indentLevel--;
         }
     }
