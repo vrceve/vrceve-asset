@@ -1522,14 +1522,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
         private void DrawLogoTexture(string guid, string path)
         {
-            inspectorLogoTex = AssetDatabase.LoadAssetAtPath(path, typeof(Texture)) as Texture;
-
             if (inspectorLogoTex == null)
             {
-                inspectorLogoTex = AssetDatabase.LoadAssetAtPath<Texture>(AssetDatabase.GUIDToAssetPath(guid));
+                inspectorLogoTex = AssetDatabase.LoadAssetAtPath(path, typeof(Texture)) as Texture;
 
                 if (inspectorLogoTex == null)
-                    return;
+                {
+                    inspectorLogoTex = AssetDatabase.LoadAssetAtPath<Texture>(AssetDatabase.GUIDToAssetPath(guid));
+
+                    if (inspectorLogoTex == null)
+                        return;
+                }
             }
             float w = EditorGUIUtility.currentViewWidth;
             Rect rect = new Rect
