@@ -1,7 +1,7 @@
 {
   "name": "vrceve.calendar",
   "displayName": "VRChatEventCalender",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "unity" : "2019.4",
   "description": "VRChat Event Calendar for VPM",
   "gitDependencies": {},
@@ -11,7 +11,7 @@
   },
   "author": {
     "name": "satania",
-    "email": "saturnianbooth@gmail.com",
+    "email": "satania.osigoto@gmail.com",
     "url": "https://vrceve.com/"
   },
   "legacyFolders": {},
