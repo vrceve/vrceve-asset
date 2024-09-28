@@ -240,6 +240,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     bool isOverlapChecking = false;
     float checkOverlapCooltime = 0.0f;
+
+    int MAX_EVENT_LENGTH = 256;
+    int MAX_GENRE_LENGTH = 10;
     #endregion
 
     #region Internal Func
@@ -300,7 +303,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         if (0 >= checkOverlapCooltime && isOverlapChecking)
         {
-            for (int i = 0; i < 10; i++)
+            for (int i = 0; i < MAX_GENRE_LENGTH; i++)
             {
                 if (dayHeaders[i] == null)
                     continue;
@@ -309,7 +312,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 //dayHeaders[i].gameObject.SetActive(IsVisibleInViewport(dayHeaders[i], _scrollRect.viewport));
             }
 
-            for (int i = 0; i < 256; i++)
+            for (int i = 0; i < MAX_EVENT_LENGTH; i++)
             {
                 if (eventButtons[i] == null)
                     continue;
@@ -672,7 +675,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
 
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < MAX_GENRE_LENGTH; i++)
         {
             if (dayHeaders[i] == null)
                 continue;
@@ -681,7 +684,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             dayHeaders[i].gameObject.SetActive(false);
         }
 
-        for (int i = 0; i < 256; i++)
+        for (int i = 0; i < MAX_EVENT_LENGTH; i++)
         {
             if (eventButtons[i] == null)
                 continue;
@@ -705,15 +708,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         if (datalist == null)
             return;
 
-        float rectHeight = DefaultPositionDayRect.y;
+        float __rectHeight = DefaultPositionDayRect.y;
+        float __rectSizeY = 0.0f;
+        int __rectNum = 0;
+        int __loopCount = datalist.Count > MAX_GENRE_LENGTH ? MAX_GENRE_LENGTH : datalist.Count;
 
-        float rectSizeY = 0.0f;
-
-        int rectNum = 0;
-
-        int loopCount = datalist.Count > 10 ? 10 : datalist.Count;
-
-        for (int i = 0; i < loopCount; i++)
+        for (int i = 0; i < __loopCount; i++)
         {
             if (i >= datalist.Count)
                 break;
@@ -721,7 +721,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             DataList dayToken = datalist[i].DataList;
             DataList IDList = (DataList)dayToken[1];
 
-            rectSizeY -= 45;
+            __rectSizeY -= 45;
 
             for (int j = 0; j < IDList.Count; j++)
             {
@@ -750,19 +750,19 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     continue;
                 }
 
-                rectSizeY -= 30;
+                __rectSizeY -= 30;
             }
 
-            rectSizeY -= 10;
+            __rectSizeY -= MAX_GENRE_LENGTH;
         }
 
-        Vector2 test = _scrollRect.content.sizeDelta;
-        test.y = rectSizeY * -1;
+        Vector2 sizeDelta = _scrollRect.content.sizeDelta;
+        sizeDelta.y = __rectSizeY * -1;
 
-        _scrollRect.content.sizeDelta = test;
+        _scrollRect.content.sizeDelta = sizeDelta;
 
         //日付を表示するヘッダーを10個しか用意してないので10
-        for (int i = 0; i < loopCount; i++)
+        for (int i = 0; i < __loopCount; i++)
         {
             if (i >= datalist.Count)
                 break;
@@ -785,7 +785,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             Vector2 dayHeaderPosition = DefaultPositionDayRect;
 
             //高さだけ計算済みの物に置き換え
-            dayHeaderPosition.y = rectHeight;
+            dayHeaderPosition.y = __rectHeight;
 
             dayHeaders[i].localPosition = dayHeaderPosition;
 
@@ -793,7 +793,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 dayHeaderTexts[i].text = DayStr;
 
             //Rect分引く
-            rectHeight -= 45;
+            __rectHeight -= 45;
 
             for (int j = 0; j < IDList.Count; j++)
             {
@@ -814,40 +814,34 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 if (genrefilters.Count > 0)
                 {
                     if (!checkGenre(genres[index], genrefilters))
-                    {
-                        //DebugLog($"Skipped {titles[index]} [Filter Out].");
                         continue;
-                    }
                 }
 
                 if (isQuest && !quests[index])
-                {
                     continue;
-                }
 
                 //次のために追加しておく
-
-                RectTransform rectTransform = eventButtons[rectNum];
+                RectTransform rectTransform = eventButtons[__rectNum];
                 if (rectTransform != null)
                 {
                     //高さだけ計算済みの物に置き換え
-                    dayHeaderPosition.y = rectHeight;
+                    dayHeaderPosition.y = __rectHeight;
 
                     rectTransform.localPosition = dayHeaderPosition;
                 }
 
-                rectHeight -= 30;
+                __rectHeight -= 30;
 
-                eventcalendar_showcontent button = eventButtonScripts[rectNum];
+                eventcalendar_showcontent button = eventButtonScripts[__rectNum];
                 button.setEventID(id);
 
-                Text _ButtonText = eventButtonTexts[rectNum];
+                Text _ButtonText = eventButtonTexts[__rectNum];
                 if (_ButtonText != null)
                 {
                     _ButtonText.text = titles[index];
                 }
 
-                if (eventButtonTimeTexts[rectNum] != null)
+                if (eventButtonTimeTexts[__rectNum] != null)
                 {
                     DateTime start = start_times[index];
                     DateTime end = end_times[index];
@@ -857,16 +851,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     string format = "HH:mm";
                     DateTime endTime = start + span;
 
-                    eventButtonTimeTexts[rectNum].text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
+                    eventButtonTimeTexts[__rectNum].text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
                 }
 
-                eventButtons[rectNum].gameObject.SetActive(true);
-                rectNum++;
+                eventButtons[__rectNum].gameObject.SetActive(true);
+                __rectNum++;
             }
 
-            rectHeight -= 10;
-
-            eventButtons[rectNum].gameObject.SetActive(false);
+            __rectHeight -= 10;
         }
         isOverlapChecking = true;
     }
@@ -1088,35 +1080,37 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             //だいたいDictionaryで返ってくる
             if (result.TokenType == TokenType.DataDictionary)
             {
-                var keys = result.DataDictionary.GetKeys();
-                var vals = result.DataDictionary.GetValues();
+                var __keys = result.DataDictionary.GetKeys();
+                var __vals = result.DataDictionary.GetValues();
 
-                for (int i = 0; i < keys.Count; i++)
+                int __genreCount = 0, __eventCount = 0;
+
+                for (int i = 0; i < __keys.Count; i++)
                 {
-                    if (keys[i].TokenType == TokenType.String)
+                    if (__keys[i].TokenType == TokenType.String)
                     {
-                        var val = vals[i];
-                        if (keys[i].String == "genres")
+                        var val = __vals[i];
+                        if (__keys[i].String == "genres" && val.TokenType == TokenType.DataDictionary)
                         {
-                            if (val.TokenType == TokenType.DataDictionary)
-                            {
-                                DataDictionary _genres = val.DataDictionary;
-                                if (_genres == null)
-                                    continue;
+                            DataDictionary _genres = val.DataDictionary;
+                            if (_genres == null)
+                                continue;
 
-                                DeserializeGenres(_genres);
-                            }
+                            __genreCount = _genres.Count;
+                            DeserializeGenres(_genres);
                         }
 
-                        if (keys[i].String == "events")
+                        if (__keys[i].String == "events" && val.TokenType == TokenType.DataList)
                         {
-                            if (val.TokenType == TokenType.DataList)
-                            {
-                                DeserializeEvents(val.DataList);
-                            }
+                            DataList _events = val.DataList;
+
+                            __eventCount = _events.Count;
+                            DeserializeEvents(_events);
                         }
                     }
                 }
+
+                DebugLog($"Json load success! Genre[{__genreCount}] Event[{__eventCount}]");
             }
             else
             {
@@ -1325,9 +1319,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     public void CheckIsAndroid()
     {
-        #if UNITY_ANDROID
+#if UNITY_ANDROID
         questToggle.SetIsOnWithoutNotify(true);
-        #endif
+#endif
     }
 
     public void GetEventFields()
@@ -1338,7 +1332,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
 
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < MAX_GENRE_LENGTH; i++)
         {
             Transform dayHeader = Content.Find($"DayHeader_{i}");
             if (dayHeader == null)
@@ -1355,7 +1349,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             dayHeaderTexts[i] = dayHeaderRectTransform.GetComponentInChildren<Text>();
         }
 
-        for (int i = 0; i < 256; i++)
+        for (int i = 0; i < MAX_EVENT_LENGTH; i++)
         {
             Transform buttonTransform = Content.Find($"{i}");
             if (buttonTransform == null)
@@ -1460,14 +1454,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //更新をかける
         toggleFilter();
     }
-#endregion
+    #endregion
 
-#region uGUI Func
+    #region uGUI Func
     public void ViewScrolled()
     {
         isOverlapChecking = true;
     }
-#endregion
+    #endregion
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     [CustomEditor(typeof(cuckoo_VRChatEventCalendar_v3))]
@@ -1549,13 +1543,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         {
             EditorGUILayout.Space();
             EditorGUILayout.Space();
-            
+
             DrawLogoTexture("3fd29cc1c649cff41ac6fe3d81087ade", "Packages/vrceve.calendar/Runtime/Resource/Images/InspectorView_Logo.png");
 
             EditorGUILayout.LabelField("Calendar Settings", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             EditorGUILayout.LabelField("初回読み込み以降は300に固定されます", EditorStyles.helpBox);
-            EditorGUILayout.PropertyField(_reloadInterval, new GUIContent("読み込みの遅延秒数"), true);
+            EditorGUILayout.PropertyField(_reloadInterval, new GUIContent("読み込みインターバル"), true);
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
@@ -1563,17 +1557,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             EditorGUILayout.LabelField("Reference Settings", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_NOWLOADING, true);
-            EditorGUILayout.PropertyField(_HeaderImage, true);
-            EditorGUILayout.PropertyField(_ContentImage, true);
-            EditorGUILayout.PropertyField(_questToggle, true);
-            EditorGUILayout.PropertyField(_mat_header, true);
+            EditorGUILayout.PropertyField(_NOWLOADING, new GUIContent("Loading Texture"), true);
+            EditorGUILayout.PropertyField(_ContentImage, new GUIContent("Event Detail Content"), true);
+            EditorGUILayout.PropertyField(_questToggle, new GUIContent("Android Toggle"), true);
+            EditorGUILayout.PropertyField(_mat_header, new GUIContent("Header Material"), true);
+            EditorGUILayout.PropertyField(_HeaderImage, new GUIContent("Header Texture"), true);
 
-            EditorGUILayout.PropertyField(_Content, true);
-            EditorGUILayout.PropertyField(_Receiver, true);
+            EditorGUILayout.PropertyField(_Content, new GUIContent("Content"), true);
+            EditorGUILayout.PropertyField(_Receiver, new GUIContent("Receiver"), true);
 
-            EditorGUILayout.PropertyField(_ScrollRect, true);
-            EditorGUILayout.PropertyField(_Filter, true);
+            EditorGUILayout.PropertyField(_ScrollRect, new GUIContent("Scroll Rect"), true);
+            EditorGUILayout.PropertyField(_Filter, new GUIContent("Filter"), true);
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
@@ -1581,8 +1575,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             EditorGUILayout.LabelField("URLs", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_url_header, true);
-            EditorGUILayout.PropertyField(_url_json, true);
+            EditorGUILayout.PropertyField(_url_header, new GUIContent("Header Image URL"), true);
+            EditorGUILayout.PropertyField(_url_json, new GUIContent("Json URL"), true);
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
@@ -1590,17 +1584,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             EditorGUILayout.LabelField("Content Panel", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_ContentPanelRect, true);
-            EditorGUILayout.PropertyField(_Day, true);
-            EditorGUILayout.PropertyField(_Time, true);
-            EditorGUILayout.PropertyField(_Title, true);
-            EditorGUILayout.PropertyField(_Quest, true);
-            EditorGUILayout.PropertyField(_Author, true);
-            EditorGUILayout.PropertyField(_Body, true);
-            EditorGUILayout.PropertyField(_Genre, true);
-            EditorGUILayout.PropertyField(_Conditions, true);
-            EditorGUILayout.PropertyField(_Way, true);
-            EditorGUILayout.PropertyField(_Note, true);
+            EditorGUILayout.PropertyField(_ContentPanelRect, new GUIContent("Content Panel"), true);
+            EditorGUILayout.PropertyField(_Day, new GUIContent("Day"), true);
+            EditorGUILayout.PropertyField(_Time, new GUIContent("Time"), true);
+            EditorGUILayout.PropertyField(_Title, new GUIContent("Title"), true);
+            EditorGUILayout.PropertyField(_Quest, new GUIContent("Android"), true);
+            EditorGUILayout.PropertyField(_Author, new GUIContent("Author"), true);
+            EditorGUILayout.PropertyField(_Body, new GUIContent("Body"), true);
+            EditorGUILayout.PropertyField(_Genre, new GUIContent("Genre"), true);
+            EditorGUILayout.PropertyField(_Conditions, new GUIContent("Conditions"), true);
+            EditorGUILayout.PropertyField(_Way, new GUIContent("Way"), true);
+            EditorGUILayout.PropertyField(_Note, new GUIContent("Note"), true);
 
             EditorGUI.indentLevel--;
         }
@@ -1613,11 +1607,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             Debug.Log($"[<color={color}>{title}</color>]{msg}");
         }
 
-#region variable
+        #region variable
         static string guid_prefab = "b9fbc0b476d953349adad81fe030abb3";
-#endregion
+        #endregion
 
-#region Func
+        #region Func
         private static bool isStringEmptyOrDontExists(string path)
         {
             return string.IsNullOrEmpty(path) || !System.IO.File.Exists(path);
@@ -1637,7 +1631,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             return AssetDatabase.LoadAssetAtPath<GameObject>(_path);
         }
-#endregion
+        #endregion
 
         [MenuItem("VRChatイベントカレンダー/プレハブ設置")]
         private static void SetupPrefab()
