@@ -235,6 +235,27 @@ TextureImporter:
       indices: 
       edges: []
       weights: []
+    - serializedVersion: 2
+      name: Checkmark
+      rect:
+        serializedVersion: 2
+        x: 54
+        y: 12
+        width: 256
+        height: 256
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      outline: []
+      physicsShape: []
+      tessellationDetail: 0
+      bones: []
+      spriteID: a499465c1115a7c45901531da2b0dff9
+      internalID: -1472456944
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
     outline: []
     physicsShape: []
     bones: []
@@ -246,6 +267,7 @@ TextureImporter:
     weights: []
     secondaryTextures: []
     nameFileIdTable:
+      Checkmark: -1472456944
       DayHeader: -1439247871
       Event Waku: 1973918643
       NowLoading: -96002548
