@@ -17,6 +17,12 @@ using UdonSharpEditor;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 {
+    private const int MAX_EVENT_LENGTH = 256;
+    private const int MAX_GENRE_LENGTH = 16;
+    private const int MAX_DAYHEADER_LENGTH = 10;
+
+    private const float CHECK_OVERLAP_COOLTIME = 0.3f;
+
     /// <summary>
     /// Udon Debugに出力する時に見やすいように
     /// </summary>
@@ -225,24 +231,23 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     Vector2 DefaultPositionDayRect = new Vector2(491f, -25.0f);
 
-    RectTransform[] dayHeaders = new RectTransform[10];
-    RectTransform[] eventButtons = new RectTransform[256];
-    eventcalendar_showcontent[] eventButtonScripts = new eventcalendar_showcontent[256];
+    private RectTransform[] dayHeaders = new RectTransform[MAX_DAYHEADER_LENGTH];
+    private RectTransform[] eventButtons = new RectTransform[MAX_EVENT_LENGTH];
+    private eventcalendar_showcontent[] eventButtonScripts = new eventcalendar_showcontent[MAX_EVENT_LENGTH];
 
-    Text[] dayHeaderTexts = new Text[10];
-    Text[] eventButtonTexts = new Text[256];
+    private Text[] dayHeaderTexts = new Text[MAX_DAYHEADER_LENGTH];
+    private Text[] eventButtonTexts = new Text[MAX_EVENT_LENGTH];
 
-    Text[] eventButtonTimeTexts = new Text[256];
+    private Text[] eventButtonTimeTexts = new Text[MAX_EVENT_LENGTH];
 
-    int checkboxLen = 0;
-    eventcalendar_checkbox[] checkboxes = new eventcalendar_checkbox[16];
-    Text[] checkboxTexts = new Text[16];
+    private int checkboxLen = 0;
+    private eventcalendar_checkbox[] checkboxes = new eventcalendar_checkbox[MAX_GENRE_LENGTH];
+    private Text[] checkboxTexts = new Text[MAX_GENRE_LENGTH];
 
-    bool isOverlapChecking = false;
-    float checkOverlapCooltime = 0.0f;
+    private bool isOverlapChecking = false;
+    private float checkOverlapCooltime = 0.0f;
 
-    int MAX_EVENT_LENGTH = 256;
-    int MAX_GENRE_LENGTH = 10;
+    private DateTime lastUpdateTime;
     #endregion
 
     #region Internal Func
@@ -272,6 +277,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //Androidモードかチェック
         CheckIsAndroid();
 
+        lastUpdateTime = DateTime.Now;
+
         //ループ開始
         UpdateLoop();
     }
@@ -290,8 +297,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public void UpdateLoop()
     {
+        float deltaTime = (float)(DateTime.Now - lastUpdateTime).TotalSeconds;
+
         //読み込み (初回のみ7秒)
-        currentTime += Time.deltaTime;
+        currentTime += deltaTime;
+
         if (currentTime > reloadInterval)
         {
             reloadCal();
@@ -299,11 +309,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         #region Overlap CheckLoop
         if (checkOverlapCooltime > 0)
-            checkOverlapCooltime -= Time.deltaTime;
+            checkOverlapCooltime -= deltaTime;
 
         if (0 >= checkOverlapCooltime && isOverlapChecking)
         {
-            for (int i = 0; i < MAX_GENRE_LENGTH; i++)
+            for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
             {
                 if (dayHeaders[i] == null)
                     continue;
@@ -321,11 +331,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 //eventButtons[i].gameObject.SetActive(IsVisibleInViewport(eventButtons[i], _scrollRect.viewport));
             }
 
-            checkOverlapCooltime = 0.3f;
+            checkOverlapCooltime = CHECK_OVERLAP_COOLTIME;
             isOverlapChecking = false;
         }
         #endregion
 
+        lastUpdateTime = DateTime.Now;
         SendCustomEventDelayedSeconds(nameof(UpdateLoop), 0.01f);
     }
     #endregion
@@ -604,14 +615,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 continue;
             }
 
-            if (genreFilters.Count > 0)
-            {
-                if (!checkGenre(genres[i], genreFilters))
-                {
-                    continue;
-                }
-            }
-            else
+            if (genreFilters.Count == 0)
+                continue;
+
+            //ジャンルにマッチしないイベントな場合はスキップ
+            if (!checkGenre(genres[i], genreFilters))
                 continue;
 
             if (isQuest && !quests[i])
@@ -675,7 +683,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
 
-        for (int i = 0; i < MAX_GENRE_LENGTH; i++)
+        for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
         {
             if (dayHeaders[i] == null)
                 continue;
@@ -697,28 +705,31 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <summary>
     /// 分けられたデータを元にイベントのリストを作成 ボタンにIDを入れる
     /// </summary>
-    /// <param name="datalist"></param>
+    /// <param name="splitedDataList"></param>
     /// <param name="isQuest"></param>
     /// <param name="genrefilters"></param>
-    private void CreateButtonFromDataList(DataList datalist, bool isQuest = false, DataList genrefilters = null)
+    private void CreateButtonFromDataList(DataList splitedDataList, bool isQuest = false, DataList genrefilters = null)
     {
         //リセットする
         ResetButton();
 
-        if (datalist == null)
+        if (splitedDataList == null)
             return;
 
         float __rectHeight = DefaultPositionDayRect.y;
         float __rectSizeY = 0.0f;
         int __rectNum = 0;
-        int __loopCount = datalist.Count > MAX_GENRE_LENGTH ? MAX_GENRE_LENGTH : datalist.Count;
+
+        int __loopCount = splitedDataList.Count;
+        if (__loopCount > MAX_DAYHEADER_LENGTH)
+            __loopCount = MAX_DAYHEADER_LENGTH;
 
         for (int i = 0; i < __loopCount; i++)
         {
-            if (i >= datalist.Count)
+            if (i >= splitedDataList.Count)
                 break;
 
-            DataList dayToken = datalist[i].DataList;
+            DataList dayToken = splitedDataList[i].DataList;
             DataList IDList = (DataList)dayToken[1];
 
             __rectSizeY -= 45;
@@ -753,7 +764,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 __rectSizeY -= 30;
             }
 
-            __rectSizeY -= MAX_GENRE_LENGTH;
+            __rectSizeY -= MAX_DAYHEADER_LENGTH;
         }
 
         Vector2 sizeDelta = _scrollRect.content.sizeDelta;
@@ -764,7 +775,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //日付を表示するヘッダーを10個しか用意してないので10
         for (int i = 0; i < __loopCount; i++)
         {
-            if (i >= datalist.Count)
+            if (i >= splitedDataList.Count)
                 break;
 
             /*
@@ -777,7 +788,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
              *       |---- EventIDのリスト
             */
 
-            DataList dayToken = datalist[i].DataList;
+            DataList dayToken = splitedDataList[i].DataList;
             string DayStr = (string)dayToken[0];
             DataList IDList = (DataList)dayToken[1];
 
@@ -820,8 +831,16 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 if (isQuest && !quests[index])
                     continue;
 
+                //最大数を上回った場合はスキップ
+                if (__rectNum >= MAX_EVENT_LENGTH)
+                {
+                    Debug.LogWarning($"Event count limit exceeded (MAX_EVENT_LENGTH).");
+                    break;
+                }
+
                 //次のために追加しておく
                 RectTransform rectTransform = eventButtons[__rectNum];
+
                 if (rectTransform != null)
                 {
                     //高さだけ計算済みの物に置き換え
@@ -1001,7 +1020,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     {
         //一回全部オフにする
         //16は最大数
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < MAX_GENRE_LENGTH; i++)
         {
             if (checkboxes[i] == null)
                 continue;
@@ -1332,7 +1351,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
 
-        for (int i = 0; i < MAX_GENRE_LENGTH; i++)
+        for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
         {
             Transform dayHeader = Content.Find($"DayHeader_{i}");
             if (dayHeader == null)
@@ -1367,7 +1386,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             eventButtonScripts[i] = buttonTransform.GetComponentInChildren<eventcalendar_showcontent>();
         }
 
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < MAX_GENRE_LENGTH; i++)
         {
             if (Filter == null)
             {
