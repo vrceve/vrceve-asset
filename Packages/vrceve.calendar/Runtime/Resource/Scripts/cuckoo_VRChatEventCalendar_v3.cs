@@ -220,6 +220,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     private VRCImageDownloader imgDownloader;
 
+    private Texture2D cacheTexture;
+
     /// <summary>
     /// ダウンロードした際の結果
     /// </summary>
@@ -1153,10 +1155,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnImageLoadSuccess(IVRCImageDownload result)
     {
+        if (Utilities.IsValid(cacheTexture))
+            Destroy(cacheTexture);
+
         isHeaderError = false;
 
         //受け取ったテクスチャをマテリアルへ反映
         mat_header.mainTexture = result.Result;
+        cacheTexture = result.Result;
     }
 
     /// <summary>
@@ -1425,7 +1431,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public void InitializeFields()
     {
-        //とりあえずクリア
         genreFilters = new DataList();
     }
 
@@ -1662,7 +1667,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 return;
             }
 
-            GameObject panel = Instantiate(prefab);
+            GameObject panel = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
             panel.name = prefab.name;
             EditorGUIUtility.PingObject(panel);
 
