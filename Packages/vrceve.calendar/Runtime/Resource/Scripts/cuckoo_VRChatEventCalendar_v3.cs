@@ -1565,6 +1565,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
         public override void OnInspectorGUI()
         {
+            serializedObject.UpdateIfRequiredOrScript();
+
             EditorGUILayout.Space();
             EditorGUILayout.Space();
 
@@ -1621,6 +1623,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.PropertyField(_Note, new GUIContent("Note"), true);
 
             EditorGUI.indentLevel--;
+
+            serializedObject.ApplyModifiedProperties();
         }
     }
 
