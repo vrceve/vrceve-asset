@@ -152,13 +152,13 @@ MonoBehaviour:
       Data: 
     - Name: $k
       Entry: 1
-      Data: isJsonError
+      Data: hasJsonError
     - Name: $v
       Entry: 7
       Data: 7|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
-      Data: isJsonError
+      Data: hasJsonError
     - Name: <UserType>k__BackingField
       Entry: 9
       Data: 3
@@ -200,13 +200,13 @@ MonoBehaviour:
       Data: 
     - Name: $k
       Entry: 1
-      Data: isHeaderError
+      Data: hasHeaderLoadError
     - Name: $v
       Entry: 7
       Data: 9|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
-      Data: isHeaderError
+      Data: hasHeaderLoadError
     - Name: <UserType>k__BackingField
       Entry: 9
       Data: 3

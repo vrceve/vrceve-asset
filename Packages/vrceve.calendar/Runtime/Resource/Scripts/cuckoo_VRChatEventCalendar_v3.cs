@@ -14,6 +14,7 @@ using UnityEditor;
 using UdonSharpEditor;
 #endif
 
+[AddComponentMenu("VRChatEventCalender/VRChatEventCalender v3")]
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 {
@@ -23,14 +24,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     private const float CHECK_OVERLAP_COOLTIME = 0.3f;
 
+    private const string FORMAT_TIME_WITHOUT_SECOND = "HH:mm";
+
     /// <summary>
     /// Udon Debugに出力する時に見やすいように
     /// </summary>
     /// <param name="text"></param>
-    private void DebugLog(string text)
-    {
-        Debug.Log($"[<color=yellow>VRChatEventCalender_v3</color>]{text}");
-    }
+    private void DebugLog(string text) => Debug.Log($"[<color=yellow>VRChatEventCalender_v3</color>]{text}");
+    private void DebugError(string text) => Debug.Log($"[<color=red>VRChatEventCalender_v3</color>]{text}");
 
     #region Variables
     /// <summary>
@@ -46,12 +47,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <summary>
     /// Jsonデータのダウンロードが失敗した際にTrueになるフラグ
     /// </summary>
-    private bool isJsonError;
+    private bool hasJsonError;
 
     /// <summary>
     /// 上部に表示される画像データのダウンロードに失敗した際にTrueになるフラグ
     /// </summary>
-    private bool isHeaderError;
+    private bool hasHeaderLoadError;
 
     /// <summary>
     /// データのリロードまでのインターバル、2回目以降から300に固定される
@@ -253,9 +254,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     #endregion
 
     #region Internal Func
-    /// <summary>
-    /// スクリプト開始時
-    /// </summary>
     private void Start()
     {
         //インスタンス作成
@@ -285,9 +283,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         UpdateLoop();
     }
 
-    /// <summary>
-    /// 破棄時の挙動 (あるかわかんない)
-    /// </summary>
     private void OnDestroy()
     {
         //破棄
@@ -309,7 +304,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             reloadCal();
         }
 
-        #region Overlap CheckLoop
+        //Overlap CheckLoop
         if (checkOverlapCooltime > 0)
             checkOverlapCooltime -= deltaTime;
 
@@ -336,10 +331,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             checkOverlapCooltime = CHECK_OVERLAP_COOLTIME;
             isOverlapChecking = false;
         }
-        #endregion
 
         lastUpdateTime = DateTime.Now;
-        SendCustomEventDelayedSeconds(nameof(UpdateLoop), 0.01f);
+        SendCustomEventDelayedFrames(nameof(UpdateLoop), 1, VRC.Udon.Common.Enums.EventTiming.Update);
     }
     #endregion
 
@@ -869,10 +863,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
                     TimeSpan span = end - start;
 
-                    string format = "HH:mm";
                     DateTime endTime = start + span;
 
-                    eventButtonTimeTexts[__rectNum].text = $"{start.ToString(format)} ~ {endTime.ToString(format)}";
+                    eventButtonTimeTexts[__rectNum].text = $"{start.ToString(FORMAT_TIME_WITHOUT_SECOND)} ~ {endTime.ToString(FORMAT_TIME_WITHOUT_SECOND)}";
                 }
 
                 eventButtons[__rectNum].gameObject.SetActive(true);
@@ -932,40 +925,18 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
                     if (val.TokenType == TokenType.String)
                     {
-                        if (key.String == "id")
-                        {
-                            ids[i] = val.String;
-                        }
-                        else if (key.String == "title")
-                        {
-                            titles[i] = val.String;
-                        }
-                        else if (key.String == "author")
-                        {
-                            authors[i] = val.String;
-                        }
-                        else if (key.String == "body")
-                        {
-                            bodys[i] = val.String;
-                        }
-                        else if (key.String == "condition")
-                        {
-                            conditions[i] = val.String;
-                        }
-                        else if (key.String == "way")
-                        {
-                            ways[i] = val.String;
-                        }
-                        else if (key.String == "note")
-                        {
-                            notes[i] = val.String;
-                        }
+                        if (key.String == "id") ids[i] = val.String;
+                        else if (key.String == "title") titles[i] = ReplaceCharacterReference(val.String);
+                        else if (key.String == "author") authors[i] = val.String;
+                        else if (key.String == "body") bodys[i] = ReplaceCharacterReference(val.String);
+                        else if (key.String == "condition") conditions[i] = val.String;
+                        else if (key.String == "way") ways[i] = ReplaceCharacterReference(val.String);
+                        else if (key.String == "note") notes[i] = ReplaceCharacterReference(val.String);
                         else if (key.String == "start")
                         {
                             string starttime = val.String;
 
-                            DateTime _start;
-                            GetTimeFromStr(starttime, out _start);
+                            GetTimeFromStr(starttime, out DateTime _start);
                             if (_start == null)
                             {
                                 DebugLog($"<color=red>Get Time Error start[{j}]</color>");
@@ -977,9 +948,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                         else if (key.String == "end")
                         {
                             string endtime = val.String;
-
-                            DateTime _end;
-                            GetTimeFromStr(endtime, out _end);
+                            GetTimeFromStr(endtime, out DateTime _end);
                             if (_end == null)
                             {
                                 DebugLog($"<color=red>Get Time Error end[{j}]</color>");
@@ -989,7 +958,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                             end_times[i] = _end;
                         }
                     }
-                    else if (val.TokenType == TokenType.DataList) //たぶんgenres用
+                    else if (val.TokenType == TokenType.DataList) //genres用
                     {
                         if (key.String == "genres")
                         {
@@ -1158,7 +1127,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         if (Utilities.IsValid(cacheTexture))
             Destroy(cacheTexture);
 
-        isHeaderError = false;
+        hasHeaderLoadError = false;
 
         //受け取ったテクスチャをマテリアルへ反映
         mat_header.mainTexture = result.Result;
@@ -1171,13 +1140,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnImageLoadError(IVRCImageDownload result)
     {
-        isHeaderError = true;
+        hasHeaderLoadError = true;
 
         var error = result.Error;
         var errorMessage = result.ErrorMessage;
 
-        DebugLog(error.ToString());
-        DebugLog(errorMessage.ToString());
+        DebugError(error.ToString());
+        DebugError(errorMessage.ToString());
     }
 
     /// <summary>
@@ -1186,7 +1155,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnStringLoadSuccess(IVRCStringDownload result)
     {
-        isJsonError = false;
+        hasJsonError = false;
 
         if (!string.IsNullOrEmpty(result.Result))
             DeserializeJson(result.Result);
@@ -1198,9 +1167,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnStringLoadError(IVRCStringDownload result)
     {
-        isJsonError = true;
-        DebugLog(result.Error);
-        DebugLog(result.ErrorCode.ToString());
+        hasJsonError = true;
+        DebugError(result.Error);
+        DebugError(result.ErrorCode.ToString());
     }
     #endregion
 
@@ -1210,7 +1179,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="id">表示するイベントのID</param>
     public void drawContentBox(string id)
     {
-        if (ContentImage == null || ContentImage.activeSelf || isJsonError)
+        if (ContentImage == null || ContentImage.activeSelf || hasJsonError)
         {
             DebugLog("Could not draw content box.");
             return;
@@ -1232,74 +1201,51 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         DateTime start = start_times[index];
         DateTime end = end_times[index];
 
-        //開催日を記載
-        #region Day
+        //開催日
         string startStr = DateTimeToString(start);
         _Day.text = startStr;
-        #endregion
 
         //開催時間と終了時間を記載
-        #region Time
-        string format = "HH:mm";
+        _Time.text = $"{start.ToString(FORMAT_TIME_WITHOUT_SECOND)} ~ {end.ToString(FORMAT_TIME_WITHOUT_SECOND)}";
 
-        _Time.text = $"{start.ToString(format)} ~ {end.ToString(format)}";
-        #endregion
-
-        #region Title
+        //Title
         _Title.text = $"<b>{titles[index]}</b>";
-        #endregion
 
         //対応プラットフォームを記載
-        #region Quest
         _Quest.text = quests[index] ? "PC, Android" : "PC";
-        #endregion
 
         //開催者を記載
-        #region Author
         _Author.text = authors[index];
-        #endregion
 
         //説明文を記載
-        #region Body
         _Body.text = bodys[index];
-        #endregion
 
         //イベントのジャンルを記載
-        #region Genre
-        //イベントのジャンルを記載
-
         _Genre.text = "";
-        for (int j = 0; j < genres[index].Count; j++)
+        for (int genreIndex = 0; genreIndex < genres[index].Count; genreIndex++)
         {
-            if (genres[index][j].TokenType != TokenType.String)
+            if (genres[index][genreIndex].TokenType != TokenType.String)
                 continue;
 
-            string _genre = (string)genres[index][j];
+            string _genre = (string)genres[index][genreIndex];
 
             if (!string.IsNullOrEmpty(_genre))
             {
                 _Genre.text = _Genre.text + _genre;
 
-                if (j != genres[index].Count - 1)
+                if (genreIndex != genres[index].Count - 1)
                     _Genre.text = _Genre.text + ", ";
             }
         }
-        #endregion
 
         //参加条件やモラルを記載
-        #region Conditions
         _Conditions.text = conditions[index];
-        #endregion
 
         //参加方法を記載
-        #region Way
         _Way.text = ways[index];
-        #endregion
 
         //ノートを記載
-        #region Note
         _Note.text = notes[index];
-        #endregion
 
         //詳細情報のボックスを表示
         ContentImage.SetActive(true);
@@ -1487,9 +1433,23 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
     #endregion
 
+    #region CharacterReference
+    private string ReplaceCharacterReference(string text)
+    {
+        text = text.Replace("&amp;", "&");
+        text = text.Replace("&copy;", "©");
+        text = text.Replace("&lt;", "<");
+        text = text.Replace("&gt;", ">");
+
+        return text;
+    }
+    #endregion
+
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
+    //---------------------------------------------------------------------------------------
+    //Custom Inspector
     [CustomEditor(typeof(cuckoo_VRChatEventCalendar_v3))]
-    public class cuckoo_VRChatEventCalender_v3_Editor : UnityEditor.Editor
+    public class cuckoo_VRChatEventCalender_v3_Editor : Editor
     {
         private Texture inspectorLogoTex;
 
@@ -1628,7 +1588,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
     }
 
-    public class cuckoo_VRChatEventCalender_V3_Tool : EditorWindow
+    //---------------------------------------------------------------------------------------
+    //MenuItem (Unityの上部メニュー)
+    public class cuckoo_VRChatEventCalender_V3_Tool
     {
         private static void DebugLog(string msg = "", string color = "yellow", string title = "VRChatイベントカレンダー")
         {
