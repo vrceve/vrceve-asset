@@ -22,7 +22,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private const int MAX_GENRE_LENGTH = 16;
     private const int MAX_DAYHEADER_LENGTH = 10;
 
-    private const float CHECK_OVERLAP_COOLTIME = 0.3f;
+    /// <summary>
+    /// 近くにいる間のUpdateLoopの間隔(秒)
+    /// </summary>
+    private const float LOOP_INTERVAL = 0.25f;
+
+    /// <summary>
+    /// スクロール時に表示範囲を更新する最短の間隔(秒)
+    /// </summary>
+    private const float VISIBLE_UPDATE_INTERVAL = 0.1f;
+
+    private const int MAX_ROWS = MAX_DAYHEADER_LENGTH + MAX_EVENT_LENGTH;
 
     private const string FORMAT_TIME_WITHOUT_SECOND = "HH:mm";
 
@@ -262,10 +272,45 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private eventcalendar_checkbox[] checkboxes = new eventcalendar_checkbox[MAX_GENRE_LENGTH];
     private Text[] checkboxTexts = new Text[MAX_GENRE_LENGTH];
 
-    private bool isOverlapChecking = false;
-    private float checkOverlapCooltime = 0.0f;
-
     private Vector3[] worldCorners = new Vector3[4];
+
+    //---- 表示範囲の計算用(行は 日付見出し→その日のイベント… の順で、上から下へ並ぶ)
+    /// <summary>
+    /// 日付見出し・イベントボタンそれぞれの、自身の位置(localPosition)から見た上下の端
+    /// </summary>
+    private float[] dayRectLo = new float[MAX_DAYHEADER_LENGTH];
+    private float[] dayRectHi = new float[MAX_DAYHEADER_LENGTH];
+    private float[] eventRectLo = new float[MAX_EVENT_LENGTH];
+    private float[] eventRectHi = new float[MAX_EVENT_LENGTH];
+
+    private int rowCount = 0;
+    private bool[] rowIsEvent = new bool[MAX_ROWS];
+    private int[] rowSlot = new int[MAX_ROWS];
+    private float[] rowPosY = new float[MAX_ROWS];
+    private float[] rowLo = new float[MAX_ROWS];
+    private float[] rowHi = new float[MAX_ROWS];
+
+    /// <summary>
+    /// 現在表示している行の範囲(visFirst〜visLast)。空のときはvisLast &lt; visFirst
+    /// </summary>
+    private int visFirst = 0;
+    private int visLast = -1;
+
+    /// <summary>
+    /// viewportの上端(contentの親の座標系)とviewportの高さ(contentの座標系)。レイアウト時に1回だけ計算する
+    /// </summary>
+    private float viewTopInParent = 0f;
+    private float viewHeightLocal = 0f;
+    private float contentScaleY = 1f;
+
+    private float lastVisibleUpdate = -1000f;
+    private bool visibleUpdatePending = false;
+
+    /// <summary>
+    /// ボタン(slot)に割り当てるイベントindexと、実際にテキストを設定済みのイベントindex
+    /// </summary>
+    private int[] slotEventIndex = new int[MAX_EVENT_LENGTH];
+    private int[] slotFilledIndex = new int[MAX_EVENT_LENGTH];
     private int usedDayCount = 0;
     private int usedEventCount = 0;
 
@@ -455,35 +500,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             reloadCal();
         }
 
-        //Overlap CheckLoop
-        if (checkOverlapCooltime > 0)
-            checkOverlapCooltime -= deltaTime;
-
-        if (0 >= checkOverlapCooltime && isOverlapChecking)
-        {
-            Rect viewRect = GetWorldRect(_scrollRect.viewport);
-
-            for (int i = 0; i < usedDayCount; i++)
-            {
-                GameObject go = dayHeaders[i].gameObject;
-                bool on = GetWorldRect(dayHeaders[i]).Overlaps(viewRect);
-                if (go.activeSelf != on)
-                    go.SetActive(on);
-            }
-
-            for (int i = 0; i < usedEventCount; i++)
-            {
-                GameObject go = eventButtons[i].gameObject;
-                bool on = GetWorldRect(eventButtons[i]).Overlaps(viewRect);
-                if (go.activeSelf != on)
-                    go.SetActive(on);
-            }
-
-            checkOverlapCooltime = CHECK_OVERLAP_COOLTIME;
-            isOverlapChecking = false;
-        }
-
-        SendCustomEventDelayedFrames(nameof(UpdateLoop), 1, VRC.Udon.Common.Enums.EventTiming.Update);
+        SendCustomEventDelayedSeconds(nameof(UpdateLoop), LOOP_INTERVAL, VRC.Udon.Common.Enums.EventTiming.Update);
     }
     #endregion
 
@@ -519,17 +536,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
 
     #region Optimize Func
-
-    private Rect GetWorldRect(RectTransform rectTransform)
-    {
-        rectTransform.GetWorldCorners(worldCorners);
-
-        Vector2 size = new Vector2(
-            rectTransform.lossyScale.x * rectTransform.rect.size.x,
-            rectTransform.lossyScale.y * rectTransform.rect.size.y);
-
-        return new Rect(worldCorners[0], size);
-    }
 
     #endregion
 
@@ -645,6 +651,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         dayStrs = new string[count];
         timeStrs = new string[count];
         genres = new DataList[count];
+
+        //イベントの内容が入れ替わるので、ボタンに設定済みのテキストは無効にする
+        for (int i = 0; i < MAX_EVENT_LENGTH; i++)
+            slotFilledIndex[i] = -1;
     }
     #endregion
 
@@ -839,7 +849,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
 
     /// <summary>
-    /// ボタンの位置を初期位置へ(見えないところへ移動してる)
+    /// 全てのボタンを非表示にして見えない位置へ移動する(起動時に1回だけ)
     /// </summary>
     private void ResetButton()
     {
@@ -855,6 +865,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
 
+        rowCount = 0;
+        visFirst = 0;
+        visLast = -1;
         usedDayCount = 0;
         usedEventCount = 0;
 
@@ -878,12 +891,164 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
 
     /// <summary>
+    /// 再構築の前に、表示中の行だけを非表示にして行の情報を空にする(表示していない行は元から非表示)
+    /// </summary>
+    private void ResetRows()
+    {
+        RectTransform RectTransformContent = Content.GetComponent<RectTransform>();
+
+        if (RectTransformContent != null)
+            RectTransformContent.localPosition = new Vector3(5, 0, 0);
+
+        for (int r = visFirst; r <= visLast; r++)
+            SetRowActive(r, false);
+
+        rowCount = 0;
+        visFirst = 0;
+        visLast = -1;
+        usedDayCount = 0;
+        usedEventCount = 0;
+    }
+
+    /// <summary>
+    /// 行の表示・非表示を切り替える。表示するときに位置とテキストを設定する
+    /// </summary>
+    private void SetRowActive(int r, bool active)
+    {
+        int slot = rowSlot[r];
+        RectTransform rt = rowIsEvent[r] ? eventButtons[slot] : dayHeaders[slot];
+        if (rt == null)
+            return;
+
+        if (active)
+        {
+            rt.localPosition = new Vector3(DefaultPositionDayRect.x, rowPosY[r], 0f);
+            if (rowIsEvent[r])
+                FillEventButton(slot);
+        }
+
+        GameObject go = rt.gameObject;
+        if (go.activeSelf != active)
+            go.SetActive(active);
+    }
+
+    /// <summary>
+    /// ボタンに割り当てたイベントの内容を設定する。すでに同じイベントを設定済みなら何もしない
+    /// </summary>
+    private void FillEventButton(int slot)
+    {
+        int index = slotEventIndex[slot];
+        if (slotFilledIndex[slot] == index)
+            return;
+
+        slotFilledIndex[slot] = index;
+        eventButtonScripts[slot].setEventID(ids[index]);
+
+        Text buttonText = eventButtonTexts[slot];
+        if (buttonText != null)
+            buttonText.text = titles[index];
+
+        Text timeText = eventButtonTimeTexts[slot];
+        if (timeText != null)
+            timeText.text = timeStrs[index] != null ? timeStrs[index] : "";
+    }
+
+    /// <summary>
+    /// viewportの上端と高さをcontentの座標系で求めてキャッシュする(レイアウトのたびに1回だけ)
+    /// </summary>
+    private void CacheViewport()
+    {
+        RectTransform viewport = _scrollRect.viewport;
+        viewport.GetWorldCorners(worldCorners);
+
+        float y0 = Content.InverseTransformPoint(worldCorners[0]).y;
+        float y1 = Content.InverseTransformPoint(worldCorners[1]).y;
+        float top = y0 > y1 ? y0 : y1;
+        float bottom = y0 > y1 ? y1 : y0;
+
+        contentScaleY = Content.localScale.y;
+        if (contentScaleY == 0f)
+            contentScaleY = 1f;
+
+        viewHeightLocal = top - bottom;
+        viewTopInParent = Content.localPosition.y + contentScaleY * top;
+    }
+
+    /// <summary>
+    /// 見えている行だけを表示する。前回から変わった行だけを切り替える
+    /// </summary>
+    private void UpdateVisibleRows()
+    {
+        lastVisibleUpdate = Time.time;
+
+        if (rowCount == 0)
+            return;
+
+        float top = (viewTopInParent - Content.localPosition.y) / contentScaleY;
+        float bottom = top - viewHeightLocal;
+
+        //rowLo は上の行ほど大きいので、top以下になる最初の行が見え始める行
+        int lo = 0;
+        int hi = rowCount;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (rowLo[mid] <= top)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        int first = lo;
+
+        //rowHi は下の行ほど小さいので、bottom未満になる最初の行の1つ前が最後に見える行
+        lo = 0;
+        hi = rowCount;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (rowHi[mid] < bottom)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        int last = lo - 1;
+
+        int oldFirst = visFirst;
+        int oldLast = visLast;
+
+        for (int r = oldFirst; r <= oldLast; r++)
+        {
+            if (r < first || r > last)
+                SetRowActive(r, false);
+        }
+
+        for (int r = first; r <= last; r++)
+        {
+            if (r < oldFirst || r > oldLast)
+                SetRowActive(r, true);
+        }
+
+        visFirst = first;
+        visLast = last;
+    }
+
+    private void AddRow(bool isEvent, int slot, float posY, float lo, float hi)
+    {
+        rowIsEvent[rowCount] = isEvent;
+        rowSlot[rowCount] = slot;
+        rowPosY[rowCount] = posY;
+        rowLo[rowCount] = posY + lo;
+        rowHi[rowCount] = posY + hi;
+        rowCount++;
+    }
+
+    /// <summary>
     /// 分けられたデータを元にイベントのリストを作成 ボタンにIDを入れる
     /// </summary>
     private void CreateButtonFromDataList(DataList splitedDataList)
     {
-        //リセットする
-        ResetButton();
+        //前回の表示をリセットする
+        ResetRows();
 
         if (splitedDataList == null)
             return;
@@ -908,16 +1073,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         _scrollRect.content.sizeDelta = sizeDelta;
 
-        Vector2 dayHeaderPosition = DefaultPositionDayRect;
-
         for (int i = 0; i < __loopCount; i++)
         {
             DataList dayToken = splitedDataList[i].DataList;
             string DayStr = (string)dayToken[0];
             DataList indexList = (DataList)dayToken[1];
 
-            dayHeaderPosition.y = __rectHeight;
-            dayHeaders[i].localPosition = dayHeaderPosition;
+            AddRow(false, i, __rectHeight, dayRectLo[i], dayRectHi[i]);
 
             if (dayHeaderTexts[i] != null)
                 dayHeaderTexts[i].text = DayStr;
@@ -935,28 +1097,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     break;
                 }
 
-                RectTransform rectTransform = eventButtons[__rectNum];
-
-                if (rectTransform != null)
-                {
-                    dayHeaderPosition.y = __rectHeight;
-                    rectTransform.localPosition = dayHeaderPosition;
-                }
+                AddRow(true, __rectNum, __rectHeight, eventRectLo[__rectNum], eventRectHi[__rectNum]);
+                slotEventIndex[__rectNum] = index;
 
                 __rectHeight -= 30;
-
-                eventButtonScripts[__rectNum].setEventID(ids[index]);
-
-                Text _ButtonText = eventButtonTexts[__rectNum];
-                if (_ButtonText != null)
-                    _ButtonText.text = titles[index];
-
-                if (eventButtonTimeTexts[__rectNum] != null)
-                {
-                    eventButtonTimeTexts[__rectNum].text = $"{start_times[index].ToString(FORMAT_TIME_WITHOUT_SECOND)} ~ {end_times[index].ToString(FORMAT_TIME_WITHOUT_SECOND)}";
-                }
-
-                eventButtons[__rectNum].gameObject.SetActive(true);
                 __rectNum++;
             }
 
@@ -964,7 +1108,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
         usedDayCount = __loopCount;
         usedEventCount = __rectNum;
-        isOverlapChecking = true;
+
+        //viewportの位置と高さを求めて、見える行を表示する(位置とテキストは表示するときに設定する)
+        CacheViewport();
+        UpdateVisibleRows();
     }
 
     /// <summary>
@@ -1228,6 +1375,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         hasHeaderLoadError = false;
 
         //受け取ったテクスチャをマテリアルへ反映
+        //(一度非表示にしないとマテリアルが反映されなかった経緯があるため、確認できるまで残す)
         HeaderImage.SetActive(false);
         mat_header.mainTexture = result.Result;
         cacheTexture = result.Result;
@@ -1480,6 +1628,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 pendingDetailId = id;
                 pendingDetailsRequest = true;
                 DrawContent(index, "読み込み中...");
+                TryDispatchDetails();
                 return;
             }
 
@@ -1626,6 +1775,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             dayHeaders[i] = dayHeaderRectTransform;
             dayHeaders[i].localPosition = dayHeaderPosition;
 
+            float dayScaleY = dayHeaderRectTransform.localScale.y;
+            dayRectLo[i] = dayHeaderRectTransform.rect.yMin * dayScaleY;
+            dayRectHi[i] = dayHeaderRectTransform.rect.yMax * dayScaleY;
+
             dayHeaderTexts[i] = dayHeaderRectTransform.GetComponentInChildren<Text>();
         }
 
@@ -1641,6 +1794,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             RectTransform buttonRectTransform = buttonTransform.GetComponent<RectTransform>();
             eventButtons[i] = buttonRectTransform;
             eventButtons[i].localPosition = dayHeaderPosition;
+
+            float eventScaleY = buttonRectTransform.localScale.y;
+            eventRectLo[i] = buttonRectTransform.rect.yMin * eventScaleY;
+            eventRectHi[i] = buttonRectTransform.rect.yMax * eventScaleY;
 
             eventButtonTexts[i] = buttonRectTransform.Find("Button/Text").GetComponent<Text>();
             eventButtonTimeTexts[i] = buttonRectTransform.Find("TimeRect/TimeText").GetComponent<Text>();
@@ -1741,7 +1898,25 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     #region uGUI Func
     public void ViewScrolled()
     {
-        isOverlapChecking = true;
+        if (rowCount == 0)
+            return;
+
+        //スクロールに追従しつつ、更新は0.1秒に1回までにする
+        if (Time.time - lastVisibleUpdate >= VISIBLE_UPDATE_INTERVAL)
+        {
+            UpdateVisibleRows();
+        }
+        else if (!visibleUpdatePending)
+        {
+            visibleUpdatePending = true;
+            SendCustomEventDelayedSeconds(nameof(DelayedVisibleUpdate), VISIBLE_UPDATE_INTERVAL, VRC.Udon.Common.Enums.EventTiming.Update);
+        }
+    }
+
+    public void DelayedVisibleUpdate()
+    {
+        visibleUpdatePending = false;
+        UpdateVisibleRows();
     }
     #endregion
 
