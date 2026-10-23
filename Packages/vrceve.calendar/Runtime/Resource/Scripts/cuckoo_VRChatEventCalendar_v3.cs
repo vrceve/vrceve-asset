@@ -281,6 +281,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     private int failCount = 0;
 
+    /// <summary>
+    /// /events はサーバー側で60分ごとに切り替わるので、取得は60分に1回(初回・失敗後・Interact時は即時)
+    /// </summary>
+    private const float EVENTS_REFRESH_INTERVAL = 3600f;
+    private bool eventsDue = true;
+    private float nextEventsTime = 0f;
+
     // /image はサーバー側で5分刻みに切り替わるので、5分ごとのリロードでは毎回取りに行く
     private const float HEADER_REFRESH_INTERVAL = 240f;
     private const float INTERACT_RELOAD_COOLDOWN = 30f;
@@ -375,6 +382,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         if (Time.time - lastReloadStart < INTERACT_RELOAD_COOLDOWN)
             return;
 
+        eventsDue = true;
+        nextHeaderTime = 0f;
         currentTime = reloadInterval + 1;
         reloadStep = 0;
     }
@@ -471,8 +480,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     info);
             }
 
-            //タイトルを取得
-            VRCStringDownloader.LoadUrl(url_json, Receiver);
+            //イベント一覧は60分に1回(初回・失敗後・Interact時は即時)だけ取得する
+            if (eventsDue || Time.time >= nextEventsTime)
+            {
+                eventsDue = false;
+                nextEventsTime = Time.time + EVENTS_REFRESH_INTERVAL;
+                VRCStringDownloader.LoadUrl(url_json, Receiver);
+            }
 
             //処理をdeltaTime分ずらすため？
             reloadStep = 1;
@@ -1031,6 +1045,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     {
         failCount++;
         hasJsonError = !hasData;
+        eventsDue = true;
 
         float retry = 30f * Mathf.Pow(2f, failCount - 1);
         if (retry > 300f)
