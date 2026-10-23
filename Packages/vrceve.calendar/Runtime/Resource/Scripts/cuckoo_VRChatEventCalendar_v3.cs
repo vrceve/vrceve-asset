@@ -1178,8 +1178,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 if (legacy) inlineDetails = true;
 
                 if (dic.TryGetValue("id", out t) && t.TokenType == TokenType.String) ids[i] = t.String;
-                if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = legacy ? ReplaceCharacterReference(t.String) : NeutralizeTags(t.String);
-                if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = legacy ? t.String : NeutralizeTags(t.String);
+                if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = legacy ? ReplaceCharacterReference(t.String) : t.String;
+                if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = t.String;
                 if (dic.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[i] = ReplaceCharacterReference(t.String);
                 if (dic.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[i] = t.String;
                 if (dic.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[i] = ReplaceCharacterReference(t.String);
@@ -1517,10 +1517,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         DataDictionary d = entry.DataDictionary;
         DataToken t;
-        if (d.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[index] = NeutralizeTags(t.String);
-        if (d.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[index] = NeutralizeTags(t.String);
-        if (d.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[index] = NeutralizeTags(t.String);
-        if (d.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[index] = NeutralizeTags(t.String);
+        if (d.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[index] = t.String;
+        if (d.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[index] = t.String;
+        if (d.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[index] = t.String;
+        if (d.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[index] = t.String;
         return true;
     }
 
@@ -1677,7 +1677,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         _Time.text = timeStrs[index];
 
         //Title
-        _Title.text = $"<b>{titles[index]}</b>";
+        _Title.text = titles[index]; //太字はTextのFont Styleで指定している
 
         //対応プラットフォームを記載
         _Quest.text = quests[index] ? "PC, Android" : "PC";
@@ -1937,26 +1937,15 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     #endregion
 
     #region CharacterReference
-    /// <summary>
-    /// サーバーから受け取った文字列に '<' '>' があると、リッチテキストのタグとして解釈されてしまうため全角にする
-    /// </summary>
-    private string NeutralizeTags(string text)
-    {
-        if (text.IndexOf('<') < 0 && text.IndexOf('>') < 0)
-            return text;
-
-        return text.Replace("<", "＜").Replace(">", "＞");
-    }
-
     private string ReplaceCharacterReference(string text)
     {
         if (text.IndexOf('&') < 0)
             return text;
 
         text = text.Replace("&copy;", "©");
-        //'<' '>'に戻すとリッチテキストのタグとして解釈されてしまうため、全角に置き換える
-        text = text.Replace("&lt;", "＜");
-        text = text.Replace("&gt;", "＞");
+        //表示するTextはリッチテキストをオフにしているので、'<' '>' はそのまま戻してよい
+        text = text.Replace("&lt;", "<");
+        text = text.Replace("&gt;", ">");
         text = text.Replace("&amp;", "&");
 
         return text;
