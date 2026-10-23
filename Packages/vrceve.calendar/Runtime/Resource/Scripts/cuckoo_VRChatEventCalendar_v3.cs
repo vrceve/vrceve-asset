@@ -274,6 +274,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     string[] dayStrs;
 
+    /// <summary>
+    /// 各イベントの時刻表示文字列(HH:mm ~ HH:mm)。受信時に1回だけ作る
+    /// </summary>
+    string[] timeStrs;
+
+    /// <summary>
+    /// 直前のイベントの日付部分(yyyy-MM-dd)とその表示文字列。同じ日付なら再利用する
+    /// </summary>
+    private string lastDatePart = "";
+    private string lastDayStr = "";
+
     private string[] weekdayNames = new string[] { "日", "月", "火", "水", "木", "金", "土" };
 
     /// <summary>
@@ -540,22 +551,27 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         //日付を変換
         string _time = timeStr.Substring(0, _Plus);
-        if (!IsValidTimeStr(_time))
-        {
-            DebugLog($"Invalid time format: {_time}");
-            time = new DateTime();
-            return false;
-        }
-
-        time = DateTime.ParseExact(_time, format, null);
-        return true;
+        return TryParseTimeStr(_time, out time);
     }
 
     /// <summary>
-    /// ParseExactが例外を出さないよう、yyyy-MM-ddTHH:mm:ss.fff の形式と値の範囲を事前に確認する
+    /// s の start から len 桁の数字を整数にする(数字であることは確認済みの前提)
     /// </summary>
-    private bool IsValidTimeStr(string s)
+    private int Num(string s, int start, int len)
     {
+        int n = 0;
+        for (int i = 0; i < len; i++)
+            n = n * 10 + ((int)s[start + i] - 48);
+        return n;
+    }
+
+    /// <summary>
+    /// yyyy-MM-ddTHH:mm:ss.fff の形式と値の範囲を確認し、問題なければDateTimeを直接作る(ParseExactは使わない)
+    /// </summary>
+    private bool TryParseTimeStr(string s, out DateTime time)
+    {
+        time = new DateTime();
+
         if (s.Length != 23)
             return false;
 
@@ -584,12 +600,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             }
         }
 
-        int year = int.Parse(s.Substring(0, 4));
-        int month = int.Parse(s.Substring(5, 2));
-        int day = int.Parse(s.Substring(8, 2));
-        int hour = int.Parse(s.Substring(11, 2));
-        int minute = int.Parse(s.Substring(14, 2));
-        int second = int.Parse(s.Substring(17, 2));
+        int year = Num(s, 0, 4);
+        int month = Num(s, 5, 2);
+        int day = Num(s, 8, 2);
+        int hour = Num(s, 11, 2);
+        int minute = Num(s, 14, 2);
+        int second = Num(s, 17, 2);
+        int millisecond = Num(s, 20, 3);
 
         if (year < 1 || month < 1 || month > 12 || day < 1)
             return false;
@@ -602,7 +619,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         else if (month == 2)
             maxDay = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 29 : 28;
 
-        return day <= maxDay;
+        if (day > maxDay)
+            return false;
+
+        time = new DateTime(year, month, day, hour, minute, second, millisecond);
+        return true;
     }
 
     /// <summary>
@@ -622,12 +643,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         notes = new string[count];
         ids = new string[count];
         dayStrs = new string[count];
+        timeStrs = new string[count];
         genres = new DataList[count];
-    }
-
-    private string DateTimeToString(DateTime time)
-    {
-        return time.ToString("yyyy-MM-dd") + " (" + weekdayNames[(int)time.DayOfWeek] + ")";
     }
     #endregion
 
@@ -637,7 +654,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     public void reloadCal()
     {
         //エラーが起きた場合は再リロードさせる
-        DebugLog("Calling reload.");
         if (reloadStep == 0)
         {
             //一覧を取得するときに、詳細の取得中や直前の取得から5秒未満なら待つ
@@ -680,7 +696,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         else if (reloadStep == 1)
         {
             //Cal.SetActive(true);
-            DebugLog("Reloaded.");
 
             //タイマーをリセット
             reloadStep = 0;
@@ -980,6 +995,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private void DeserializeEvents(DataList events)
     {
         inlineDetails = false;
+        lastDatePart = "";
+        lastDayStr = "";
         InitializeEventDatas(events.Count);
         for (int i = 0; i < events.Count; i++)
         {
@@ -991,11 +1008,15 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             {
                 DataDictionary dic = events[i].DataDictionary;
                 DataToken t;
+                string startHM = null;
+
+                //旧形式(/events: 一覧に詳細を含み、HTMLの実体参照が残っている)のときだけ文字参照を戻す
+                bool legacy = dic.ContainsKey("body");
+                if (legacy) inlineDetails = true;
 
                 if (dic.TryGetValue("id", out t) && t.TokenType == TokenType.String) ids[i] = t.String;
-                if (dic.ContainsKey("body")) inlineDetails = true;
-                if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = ReplaceCharacterReference(t.String);
-                if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = t.String;
+                if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = legacy ? ReplaceCharacterReference(t.String) : NeutralizeTags(t.String);
+                if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = legacy ? t.String : NeutralizeTags(t.String);
                 if (dic.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[i] = ReplaceCharacterReference(t.String);
                 if (dic.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[i] = t.String;
                 if (dic.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[i] = ReplaceCharacterReference(t.String);
@@ -1008,7 +1029,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     if (GetTimeFromStr(t.String, out DateTime _start))
                     {
                         start_times[i] = _start;
-                        dayStrs[i] = DateTimeToString(_start);
+
+                        //同じ日付が続く間は、前回作った日付の表示文字列を再利用する
+                        string datePart = t.String.Substring(0, 10);
+                        if (datePart != lastDatePart)
+                        {
+                            lastDatePart = datePart;
+                            lastDayStr = datePart + " (" + weekdayNames[(int)_start.DayOfWeek] + ")";
+                        }
+
+                        dayStrs[i] = lastDayStr;
+                        startHM = t.String.Substring(11, 5);
                     }
                     else
                     {
@@ -1019,7 +1050,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 if (dic.TryGetValue("end", out t) && t.TokenType == TokenType.String)
                 {
                     if (GetTimeFromStr(t.String, out DateTime _end))
+                    {
                         end_times[i] = _end;
+                        if (startHM != null)
+                            timeStrs[i] = startHM + " ~ " + t.String.Substring(11, 5);
+                    }
                     else
                         DebugLog($"<color=red>Get Time Error end[{i}]</color>");
                 }
@@ -1318,10 +1353,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         DataDictionary d = entry.DataDictionary;
         DataToken t;
-        if (d.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[index] = ReplaceCharacterReference(t.String);
-        if (d.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[index] = t.String;
-        if (d.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[index] = ReplaceCharacterReference(t.String);
-        if (d.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[index] = ReplaceCharacterReference(t.String);
+        if (d.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[index] = NeutralizeTags(t.String);
+        if (d.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[index] = NeutralizeTags(t.String);
+        if (d.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[index] = NeutralizeTags(t.String);
+        if (d.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[index] = NeutralizeTags(t.String);
         return true;
     }
 
@@ -1470,15 +1505,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         if (contentPanelRect != null)
             contentPanelRect.localPosition = new Vector3(0, 0, 0);
 
-        DateTime start = start_times[index];
-        DateTime end = end_times[index];
-
         //開催日
-        string startStr = DateTimeToString(start);
-        _Day.text = startStr;
+        _Day.text = dayStrs[index];
 
         //開催時間と終了時間を記載
-        _Time.text = $"{start.ToString(FORMAT_TIME_WITHOUT_SECOND)} ~ {end.ToString(FORMAT_TIME_WITHOUT_SECOND)}";
+        _Time.text = timeStrs[index];
 
         //Title
         _Title.text = $"<b>{titles[index]}</b>";
@@ -1715,6 +1746,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     #endregion
 
     #region CharacterReference
+    /// <summary>
+    /// サーバーから受け取った文字列に '<' '>' があると、リッチテキストのタグとして解釈されてしまうため全角にする
+    /// </summary>
+    private string NeutralizeTags(string text)
+    {
+        if (text.IndexOf('<') < 0 && text.IndexOf('>') < 0)
+            return text;
+
+        return text.Replace("<", "＜").Replace(">", "＞");
+    }
+
     private string ReplaceCharacterReference(string text)
     {
         if (text.IndexOf('&') < 0)
