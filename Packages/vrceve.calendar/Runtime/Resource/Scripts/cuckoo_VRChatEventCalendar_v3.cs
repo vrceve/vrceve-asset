@@ -121,6 +121,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     [SerializeField] VRCUrl url_json;
 
     /// <summary>
+    /// 詳細(body, condition, way, note)を取得するURL。空の場合は一覧に含まれる詳細をそのまま使う(旧形式)
+    /// </summary>
+    [SerializeField] VRCUrl url_details;
+
+    /// <summary>
     /// イベントのリストを表示するところの親オブジェクト
     /// </summary>
     [SerializeField] Transform Content;
@@ -325,6 +330,46 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     private bool isNear = true;
     private float lastLoopTime = 0f;
+
+    /// <summary>
+    /// VRCStringDownloaderの5秒制限を守るための、取得間隔と取得中フラグ
+    /// </summary>
+    private const float STRING_LOAD_GAP = 5.5f;
+    private float lastStringLoadTime = -1000f;
+    private bool listLoading = false;
+    private bool detailsLoading = false;
+
+    /// <summary>
+    /// 一覧に詳細が含まれていた(旧形式)場合はTrue。この場合は詳細を取得しない
+    /// </summary>
+    private bool inlineDetails = false;
+
+    private string listVersion = "";
+    private string detailsVersion = "";
+    private DataDictionary detailsDict = null;
+
+    /// <summary>
+    /// 詳細の取得待ちのイベントID。取得が終わったら詳細ボックスを描き直す
+    /// </summary>
+    private string pendingDetailId = null;
+    private bool pendingDetailsRequest = false;
+    private float nextDetailsAllowed = 0f;
+    private int detailFailCount = 0;
+
+    /// <summary>
+    /// 一覧のversionが変わったあと、古い詳細を取り直す要求を出したversion
+    /// </summary>
+    private string detailsRefreshedFor = "";
+
+    /// <summary>
+    /// versionの食い違いで一覧を取り直す要求を出した詳細側のversion
+    /// </summary>
+    private string listRefetchFor = "";
+
+    /// <summary>
+    /// 詳細ボックスに今表示しているイベントのindex(表示していなければ-1)
+    /// </summary>
+    private int drawnIndex = -1;
     private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
@@ -383,6 +428,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 return;
             }
         }
+
+        //詳細の取得待ちがあれば、5秒制限を守れるタイミングで取得する
+        TryDispatchDetails();
 
         //読み込み (初回のみ7秒)
         currentTime += deltaTime;
@@ -592,6 +640,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         DebugLog("Calling reload.");
         if (reloadStep == 0)
         {
+            //一覧を取得するときに、詳細の取得中や直前の取得から5秒未満なら待つ
+            if ((eventsDue || Time.time >= nextEventsTime) && !CanLoadString())
+                return;
+
             //初回(データ未取得)のときだけローディングを表示し、取得済みなら今の表示を保ったまま裏で更新する
             if (!hasData)
                 NOWLOADING.SetActive(true);
@@ -617,6 +669,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             {
                 eventsDue = false;
                 nextEventsTime = Time.time + SecondsUntilNextSlot(EVENTS_SLOT_PERIOD);
+                listLoading = true;
+                lastStringLoadTime = Time.time;
                 VRCStringDownloader.LoadUrl(url_json, Receiver);
             }
 
@@ -925,6 +979,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="events">受け取ったデータ</param>
     private void DeserializeEvents(DataList events)
     {
+        inlineDetails = false;
         InitializeEventDatas(events.Count);
         for (int i = 0; i < events.Count; i++)
         {
@@ -938,6 +993,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                 DataToken t;
 
                 if (dic.TryGetValue("id", out t) && t.TokenType == TokenType.String) ids[i] = t.String;
+                if (dic.ContainsKey("body")) inlineDetails = true;
                 if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = ReplaceCharacterReference(t.String);
                 if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = t.String;
                 if (dic.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[i] = ReplaceCharacterReference(t.String);
@@ -1080,6 +1136,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     if (__keys[i].TokenType == TokenType.String)
                     {
                         var val = __vals[i];
+                        if (__keys[i].String == "version")
+                        {
+                            listVersion = val.TokenType == TokenType.String ? val.String : val.ToString();
+                        }
+
                         if (__keys[i].String == "genres" && val.TokenType == TokenType.DataDictionary)
                         {
                             DataDictionary _genres = val.DataDictionary;
@@ -1159,6 +1220,14 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnStringLoadSuccess(IVRCStringDownload result)
     {
+        if (IsDetailsUrl(result))
+        {
+            OnDetailsLoaded(result.Result);
+            return;
+        }
+
+        listLoading = false;
+
         if (string.IsNullOrEmpty(result.Result))
         {
             OnReloadFailed();
@@ -1186,8 +1255,144 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     {
         DebugError(result.Error);
         DebugError(result.ErrorCode.ToString());
+
+        if (IsDetailsUrl(result))
+        {
+            OnDetailsFailed();
+            return;
+        }
+
+        listLoading = false;
         OnReloadFailed();
     }
+
+    #region Details
+    private bool HasDetailsUrl()
+    {
+        return url_details != null && !string.IsNullOrEmpty(url_details.Get());
+    }
+
+    /// <summary>
+    /// 一覧に詳細が含まれていない新形式で、詳細URLが設定されている場合はTrue
+    /// </summary>
+    private bool NeedsDetailFetch()
+    {
+        return !inlineDetails && HasDetailsUrl();
+    }
+
+    private bool IsDetailsUrl(IVRCStringDownload result)
+    {
+        return HasDetailsUrl() && result.Url != null && result.Url.Get() == url_details.Get();
+    }
+
+    /// <summary>
+    /// 一覧・詳細のどちらも取得中ではなく、直前の取得から5秒以上あいていればTrue
+    /// </summary>
+    private bool CanLoadString()
+    {
+        return !listLoading && !detailsLoading && Time.time - lastStringLoadTime >= STRING_LOAD_GAP;
+    }
+
+    private void TryDispatchDetails()
+    {
+        if (!pendingDetailsRequest || Time.time < nextDetailsAllowed || !CanLoadString())
+            return;
+
+        pendingDetailsRequest = false;
+        detailsLoading = true;
+        lastStringLoadTime = Time.time;
+        VRCStringDownloader.LoadUrl(url_details, Receiver);
+    }
+
+    /// <summary>
+    /// 取得済みの詳細からindexのイベントの詳細を反映する。詳細にそのIDが無ければfalse
+    /// </summary>
+    private bool ApplyDetails(int index)
+    {
+        if (detailsDict == null || ids[index] == null)
+            return false;
+
+        DataToken entry;
+        if (!detailsDict.TryGetValue(ids[index], out entry) || entry.TokenType != TokenType.DataDictionary)
+            return false;
+
+        DataDictionary d = entry.DataDictionary;
+        DataToken t;
+        if (d.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[index] = ReplaceCharacterReference(t.String);
+        if (d.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[index] = t.String;
+        if (d.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[index] = ReplaceCharacterReference(t.String);
+        if (d.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[index] = ReplaceCharacterReference(t.String);
+        return true;
+    }
+
+    private void OnDetailsLoaded(string json)
+    {
+        detailsLoading = false;
+
+        DataToken root;
+        DataToken detailsToken;
+        if (string.IsNullOrEmpty(json)
+            || !VRCJson.TryDeserializeFromJson(json, out root)
+            || root.TokenType != TokenType.DataDictionary
+            || !root.DataDictionary.TryGetValue("details", out detailsToken)
+            || detailsToken.TokenType != TokenType.DataDictionary)
+        {
+            OnDetailsFailed();
+            return;
+        }
+
+        detailFailCount = 0;
+        detailsDict = detailsToken.DataDictionary;
+
+        DataToken versionToken;
+        detailsVersion = root.DataDictionary.TryGetValue("version", out versionToken)
+            ? (versionToken.TokenType == TokenType.String ? versionToken.String : versionToken.ToString())
+            : "";
+
+        //詳細の方が一覧と違うversionなら、次の機会に一覧を取り直す(一度だけ)
+        bool versionDiffers = detailsVersion != "" && listVersion != "" && detailsVersion != listVersion;
+        if (versionDiffers && listRefetchFor != detailsVersion)
+        {
+            listRefetchFor = detailsVersion;
+            nextEventsTime = Time.time + STRING_LOAD_GAP;
+        }
+
+        //詳細ボックスを開いている場合は描き直す
+        if (drawnIndex >= 0 && ContentImage != null && ContentImage.activeSelf)
+        {
+            if (ApplyDetails(drawnIndex))
+            {
+                pendingDetailId = null;
+                DrawContent(drawnIndex, null);
+            }
+            else if (pendingDetailId != null)
+            {
+                pendingDetailId = null;
+                DrawContent(drawnIndex, "更新中です。しばらくしてからもう一度開いてください");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 詳細の取得に失敗した場合: 30秒→60秒→…→最大300秒空けて再試行できるようにする
+    /// </summary>
+    private void OnDetailsFailed()
+    {
+        detailsLoading = false;
+        detailFailCount++;
+
+        float wait = 30f * Mathf.Pow(2f, detailFailCount - 1);
+        if (wait > 300f)
+            wait = 300f;
+        nextDetailsAllowed = Time.time + wait;
+
+        if (pendingDetailId != null && drawnIndex >= 0 && ContentImage != null && ContentImage.activeSelf)
+        {
+            pendingDetailId = null;
+            DrawContent(drawnIndex, "読み込みに失敗しました。しばらくしてからもう一度開いてください");
+        }
+    }
+    #endregion
 
     /// <summary>
     /// 取得失敗時: 取得済みの表示は残し、30秒→60秒→…→最大300秒の間隔で再試行する
@@ -1232,6 +1437,35 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
         }
 
+        //詳細を別に取得する形式の場合、まだ詳細が無ければ取得してから描画する
+        if (NeedsDetailFetch())
+        {
+            if (!ApplyDetails(index))
+            {
+                pendingDetailId = id;
+                pendingDetailsRequest = true;
+                DrawContent(index, "読み込み中...");
+                return;
+            }
+
+            //一覧より古いversionの詳細だった場合は、表示したうえで裏で一度だけ取り直す
+            if (listVersion != "" && detailsVersion != listVersion && detailsRefreshedFor != listVersion)
+            {
+                detailsRefreshedFor = listVersion;
+                pendingDetailsRequest = true;
+            }
+        }
+
+        DrawContent(index, null);
+    }
+
+    /// <summary>
+    /// indexのイベントの詳細ボックスを描画する。bodyMessageが指定されている場合は説明文の代わりに表示する
+    /// </summary>
+    private void DrawContent(int index, string bodyMessage)
+    {
+        drawnIndex = index;
+
         //一番上から表示したいので、イベントの詳細表示のボックスの位置を一番上に
         if (contentPanelRect != null)
             contentPanelRect.localPosition = new Vector3(0, 0, 0);
@@ -1256,7 +1490,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         _Author.text = authors[index];
 
         //説明文を記載
-        _Body.text = bodys[index];
+        _Body.text = bodyMessage != null ? bodyMessage : bodys[index];
 
         //イベントのジャンルを記載
         string genreText = "";
@@ -1302,6 +1536,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     {
         if (ContentImage == null || !ContentImage.activeSelf)
             return;
+
+        //取得待ちの詳細は取り消す(取得済みの詳細は残す)
+        pendingDetailId = null;
+        pendingDetailsRequest = false;
+        drawnIndex = -1;
 
         //イベントの詳細情報のボックスを非表示
         ContentImage.SetActive(false);
@@ -1509,6 +1748,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private SerializedProperty _mat_header;
         private SerializedProperty _url_header;
         private SerializedProperty _url_json;
+        private SerializedProperty _url_details;
         private SerializedProperty _Content;
         private SerializedProperty _Receiver;
         private SerializedProperty _ScrollRect;
@@ -1531,6 +1771,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             _mat_header = serializedObject.FindProperty(nameof(mat_header));
             _url_header = serializedObject.FindProperty(nameof(url_header));
             _url_json = serializedObject.FindProperty(nameof(url_json));
+            _url_details = serializedObject.FindProperty(nameof(url_details));
             _Content = serializedObject.FindProperty(nameof(Content));
             _Receiver = serializedObject.FindProperty(nameof(Receiver));
             _ScrollRect = serializedObject.FindProperty(nameof(_scrollRect));
@@ -1619,7 +1860,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.LabelField("URLs", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             EditorGUILayout.PropertyField(_url_header, new GUIContent("Header Image URL"), true);
-            EditorGUILayout.PropertyField(_url_json, new GUIContent("Json URL"), true);
+            EditorGUILayout.PropertyField(_url_json, new GUIContent("Json URL (一覧)"), true);
+            EditorGUILayout.PropertyField(_url_details, new GUIContent("Details URL (詳細)"), true);
+            EditorGUILayout.LabelField("Details URL が空の場合は、Json URL に含まれる詳細(旧形式)をそのまま使います", EditorStyles.helpBox);
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
