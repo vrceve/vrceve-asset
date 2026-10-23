@@ -100305,6 +100305,8 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 6996259708349368224}
   reloadInterval: 7
   currentTime: 0
+  useActiveRange: 1
+  activeRange: 5
   NOWLOADING: {fileID: 7914756331108576149}
   HeaderImage: {fileID: 3716670388408585714}
   ContentImage: {fileID: 3716670388173622480}

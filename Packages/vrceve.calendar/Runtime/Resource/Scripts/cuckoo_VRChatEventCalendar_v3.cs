@@ -1590,7 +1590,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.PropertyField(_useActiveRange, new GUIContent("範囲内でのみ更新する"), true);
             if (_useActiveRange.boolValue)
             {
-                EditorGUILayout.LabelField("最初の1回は必ず読み込み、その後はこの範囲内にいる間だけ更新します(Quest等の負荷軽減)", EditorStyles.helpBox);
+                EditorGUILayout.LabelField("最初の1回は必ず読み込み、その後はこのオブジェクトの位置から範囲内にいる間だけ更新します(Quest等の負荷軽減)。初期値は ON / 5m です", EditorStyles.helpBox);
                 EditorGUILayout.PropertyField(_activeRange, new GUIContent("範囲(メートル)"), true);
             }
 
