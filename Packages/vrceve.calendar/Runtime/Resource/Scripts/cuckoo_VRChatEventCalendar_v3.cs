@@ -67,12 +67,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <summary>
     /// ONの場合、最初の1回の読み込みのあとは、プレイヤーがこの範囲内にいる間だけ更新処理を行う(負荷軽減、特にQuest向け)
     /// </summary>
-    public bool useActiveRange = false;
+    public bool useActiveRange = true;
 
     /// <summary>
     /// 更新処理を行う範囲(メートル)。このオブジェクトの位置からの距離
     /// </summary>
-    public float activeRange = 20f;
+    public float activeRange = 5f;
 
     /// <summary>
     /// リロード中のステップ？ 1f遅らせてreloadCalを動かすためにあるかも
