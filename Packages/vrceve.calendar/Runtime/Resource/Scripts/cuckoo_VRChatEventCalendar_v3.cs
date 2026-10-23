@@ -65,6 +65,16 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     public float currentTime = 0f;
 
     /// <summary>
+    /// ONの場合、最初の1回の読み込みのあとは、プレイヤーがこの範囲内にいる間だけ更新処理を行う(負荷軽減、特にQuest向け)
+    /// </summary>
+    public bool useActiveRange = false;
+
+    /// <summary>
+    /// 更新処理を行う範囲(メートル)。このオブジェクトの位置からの距離
+    /// </summary>
+    public float activeRange = 20f;
+
+    /// <summary>
     /// リロード中のステップ？ 1f遅らせてreloadCalを動かすためにあるかも
     /// </summary>
     private int reloadStep = 0;
@@ -302,6 +312,19 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// 全員が同時にアクセスしないよう、SLOT_MIN_DELAYに加えるランダムなばらつきの最大秒数
     /// </summary>
     private const float SLOT_JITTER = 25f;
+
+    /// <summary>
+    /// 範囲から出たときにすぐ切り替わらないよう、範囲内→範囲外の判定にだけ足す余裕(メートル)
+    /// </summary>
+    private const float ACTIVE_RANGE_MARGIN = 3f;
+
+    /// <summary>
+    /// 範囲外のときの、範囲内に入ったかの確認間隔(秒)
+    /// </summary>
+    private const float FAR_CHECK_INTERVAL = 1f;
+
+    private bool isNear = true;
+    private float lastLoopTime = 0f;
     private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
@@ -329,6 +352,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //Androidモードかチェック
         CheckIsAndroid();
 
+        lastLoopTime = Time.time;
+
         //ループ開始
         UpdateLoop();
     }
@@ -344,7 +369,20 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public void UpdateLoop()
     {
-        float deltaTime = Time.deltaTime;
+        //範囲外のときはループ間隔が空くため、実際の経過時間を使う
+        float deltaTime = Time.time - lastLoopTime;
+        lastLoopTime = Time.time;
+
+        //最初の1回の読み込みが終わったあと、範囲外にいる間は何もしない(読み込み中のものは最後まで進める)
+        if (useActiveRange && hasData && reloadStep == 0)
+        {
+            UpdateIsNear();
+            if (!isNear)
+            {
+                SendCustomEventDelayedSeconds(nameof(UpdateLoop), FAR_CHECK_INTERVAL, VRC.Udon.Common.Enums.EventTiming.Update);
+                return;
+            }
+        }
 
         //読み込み (初回のみ7秒)
         currentTime += deltaTime;
@@ -402,6 +440,23 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         nextHeaderTime = 0f;
         currentTime = reloadInterval + 1;
         reloadStep = 0;
+    }
+
+    /// <summary>
+    /// ローカルプレイヤーがこのオブジェクトの範囲内にいるかを更新する
+    /// </summary>
+    private void UpdateIsNear()
+    {
+        VRCPlayerApi player = Networking.LocalPlayer;
+        if (!Utilities.IsValid(player))
+        {
+            isNear = true;
+            return;
+        }
+
+        float distance = Vector3.Distance(player.GetPosition(), transform.position);
+        float limit = isNear ? activeRange + ACTIVE_RANGE_MARGIN : activeRange;
+        isNear = distance <= limit;
     }
 
     #region Optimize Func
@@ -1445,6 +1500,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private Texture inspectorLogoTex;
 
         private SerializedProperty _reloadInterval;
+        private SerializedProperty _useActiveRange;
+        private SerializedProperty _activeRange;
         private SerializedProperty _NOWLOADING;
         private SerializedProperty _HeaderImage;
         private SerializedProperty _ContentImage;
@@ -1465,6 +1522,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private void OnEnable()
         {
             _reloadInterval = serializedObject.FindProperty(nameof(reloadInterval));
+            _useActiveRange = serializedObject.FindProperty(nameof(useActiveRange));
+            _activeRange = serializedObject.FindProperty(nameof(activeRange));
             _NOWLOADING = serializedObject.FindProperty(nameof(NOWLOADING));
             _HeaderImage = serializedObject.FindProperty(nameof(HeaderImage));
             _ContentImage = serializedObject.FindProperty(nameof(ContentImage));
@@ -1527,6 +1586,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUI.indentLevel++;
             EditorGUILayout.LabelField("初回読み込み以降は300に固定されます", EditorStyles.helpBox);
             EditorGUILayout.PropertyField(_reloadInterval, new GUIContent("読み込みインターバル"), true);
+
+            EditorGUILayout.PropertyField(_useActiveRange, new GUIContent("範囲内でのみ更新する"), true);
+            if (_useActiveRange.boolValue)
+            {
+                EditorGUILayout.LabelField("最初の1回は必ず読み込み、その後はこの範囲内にいる間だけ更新します(Quest等の負荷軽減)", EditorStyles.helpBox);
+                EditorGUILayout.PropertyField(_activeRange, new GUIContent("範囲(メートル)"), true);
+            }
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
