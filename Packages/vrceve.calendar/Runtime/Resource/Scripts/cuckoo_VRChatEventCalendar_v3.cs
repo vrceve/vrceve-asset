@@ -250,7 +250,27 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private bool isOverlapChecking = false;
     private float checkOverlapCooltime = 0.0f;
 
-    private DateTime lastUpdateTime;
+    private Vector3[] worldCorners = new Vector3[4];
+    private int usedDayCount = 0;
+    private int usedEventCount = 0;
+
+    /// <summary>
+    /// 各イベントの開始日文字列(yyyy-MM-dd (曜))。受信時に1回だけ作る
+    /// </summary>
+    string[] dayStrs;
+
+    private string[] weekdayNames = new string[] { "日", "月", "火", "水", "木", "金", "土" };
+
+    /// <summary>
+    /// ヘッダー画像を次に取得してよい時刻(Time.time)
+    /// </summary>
+    private float nextHeaderTime = 0f;
+    private bool headerRequested = false;
+
+    private float lastReloadStart = -1000f;
+
+    private const float HEADER_REFRESH_INTERVAL = 3600f;
+    private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
     #region Internal Func
@@ -277,8 +297,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //Androidモードかチェック
         CheckIsAndroid();
 
-        lastUpdateTime = DateTime.Now;
-
         //ループ開始
         UpdateLoop();
     }
@@ -294,7 +312,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public void UpdateLoop()
     {
-        float deltaTime = (float)(DateTime.Now - lastUpdateTime).TotalSeconds;
+        float deltaTime = Time.deltaTime;
 
         //読み込み (初回のみ7秒)
         currentTime += deltaTime;
@@ -310,29 +328,28 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         if (0 >= checkOverlapCooltime && isOverlapChecking)
         {
-            for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
-            {
-                if (dayHeaders[i] == null)
-                    continue;
+            Rect viewRect = GetWorldRect(_scrollRect.viewport);
 
-                dayHeaders[i].gameObject.SetActive(IsOverlapping(dayHeaders[i], _scrollRect.viewport));
-                //dayHeaders[i].gameObject.SetActive(IsVisibleInViewport(dayHeaders[i], _scrollRect.viewport));
+            for (int i = 0; i < usedDayCount; i++)
+            {
+                GameObject go = dayHeaders[i].gameObject;
+                bool on = GetWorldRect(dayHeaders[i]).Overlaps(viewRect);
+                if (go.activeSelf != on)
+                    go.SetActive(on);
             }
 
-            for (int i = 0; i < MAX_EVENT_LENGTH; i++)
+            for (int i = 0; i < usedEventCount; i++)
             {
-                if (eventButtons[i] == null)
-                    continue;
-
-                eventButtons[i].gameObject.SetActive(IsOverlapping(eventButtons[i], _scrollRect.viewport));
-                //eventButtons[i].gameObject.SetActive(IsVisibleInViewport(eventButtons[i], _scrollRect.viewport));
+                GameObject go = eventButtons[i].gameObject;
+                bool on = GetWorldRect(eventButtons[i]).Overlaps(viewRect);
+                if (go.activeSelf != on)
+                    go.SetActive(on);
             }
 
             checkOverlapCooltime = CHECK_OVERLAP_COOLTIME;
             isOverlapChecking = false;
         }
 
-        lastUpdateTime = DateTime.Now;
         SendCustomEventDelayedFrames(nameof(UpdateLoop), 1, VRC.Udon.Common.Enums.EventTiming.Update);
     }
     #endregion
@@ -342,32 +359,24 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public override void Interact()
     {
+        if (Time.time - lastReloadStart < INTERACT_RELOAD_COOLDOWN)
+            return;
+
         currentTime = reloadInterval + 1;
         reloadStep = 0;
     }
 
     #region Optimize Func
 
-    public static Rect GetWorldRect(RectTransform rectTransform)
+    private Rect GetWorldRect(RectTransform rectTransform)
     {
-        Vector3[] corners = new Vector3[4];
-        rectTransform.GetWorldCorners(corners);
-
-        Vector3 position = corners[0];
+        rectTransform.GetWorldCorners(worldCorners);
 
         Vector2 size = new Vector2(
             rectTransform.lossyScale.x * rectTransform.rect.size.x,
             rectTransform.lossyScale.y * rectTransform.rect.size.y);
 
-        return new Rect(position, size);
-    }
-
-    public bool IsOverlapping(RectTransform rectTransform1, RectTransform rectTransform2)
-    {
-        Rect rect1 = GetWorldRect(rectTransform1);
-        Rect rect2 = GetWorldRect(rectTransform2);
-
-        return rect1.Overlaps(rect2);
+        return new Rect(worldCorners[0], size);
     }
 
     #endregion
@@ -378,19 +387,20 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     /// <param name="timeStr"></param>
     /// <param name="time"></param>
-    private void GetTimeFromStr(string timeStr, out DateTime time)
+    private bool GetTimeFromStr(string timeStr, out DateTime time)
     {
         int _Plus = timeStr.IndexOf('+');
         if (_Plus == -1)
         {
             DebugLog("Plus is not found");
             time = new DateTime();
-            return;
+            return false;
         }
 
         //日付を変換
         string _time = timeStr.Substring(0, _Plus);
         time = DateTime.ParseExact(_time, format, null);
+        return true;
     }
 
     /// <summary>
@@ -409,29 +419,16 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         ways = new string[count];
         notes = new string[count];
         ids = new string[count];
+        dayStrs = new string[count];
         genres = new DataList[count];
     }
 
-    /// <summary>
-    /// 日付からその日のイベントデータだけを返す
-    /// </summary>
-    /// <param name="dateStr">日付</param>
-    /// <returns></returns>
     private DataList getIDsbyDate(string dateStr)
     {
         DataList ret = new DataList();
-        for (int i = 0; i < start_times.Length; i++)
+        for (int i = 0; i < dayStrs.Length; i++)
         {
-            //string startTimeStr = start_times[i].ToString("yyyy-MM-dd (ddd)");
-            string startTimeStr = DateTimeToString(start_times[i]);
-
-            if (string.IsNullOrEmpty(startTimeStr))
-            {
-                DebugLog($"startTimeStr is empty. {i}");
-                continue;
-            }
-
-            if (dateStr == startTimeStr)
+            if (dateStr == dayStrs[i])
                 ret.Add(ids[i]);
         }
 
@@ -440,27 +437,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     private string DateTimeToString(DateTime time)
     {
-        if (time == null)
-            return "";
-
-        string timeStr = time.ToString("yyyy-MM-dd");
-
-        if (time.DayOfWeek == DayOfWeek.Monday)
-            timeStr += " (月)";
-        else if (time.DayOfWeek == DayOfWeek.Tuesday)
-            timeStr += " (火)";
-        else if (time.DayOfWeek == DayOfWeek.Wednesday)
-            timeStr += " (水)";
-        else if (time.DayOfWeek == DayOfWeek.Thursday)
-            timeStr += " (木)";
-        else if (time.DayOfWeek == DayOfWeek.Friday)
-            timeStr += " (金)";
-        else if (time.DayOfWeek == DayOfWeek.Saturday)
-            timeStr += " (土)";
-        else if (time.DayOfWeek == DayOfWeek.Sunday)
-            timeStr += " (日)";
-
-        return timeStr;
+        return time.ToString("yyyy-MM-dd") + " (" + weekdayNames[(int)time.DayOfWeek] + ")";
     }
     #endregion
 
@@ -488,21 +465,21 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             NOWLOADING.SetActive(true);
 
-            //一度非表示にしないとマテリアルが反映されないため？ 非表示
-            HeaderImage.SetActive(false);
+            lastReloadStart = Time.time;
 
-            // ダウンロード実行
-            _task = imgDownloader.DownloadImage(
-                url_header,
-                mat_header,
-                Receiver,
-                info);
+            // ヘッダー画像は初回・失敗時・1時間ごとにだけ取得する
+            if (!headerRequested || hasHeaderLoadError || Time.time >= nextHeaderTime)
+            {
+                headerRequested = true;
+                nextHeaderTime = Time.time + HEADER_REFRESH_INTERVAL;
 
-            foreach (var dayHeader in dayHeaders)
-                dayHeader.gameObject.SetActive(false);
-
-            foreach (var eventButton in eventButtons)
-                eventButton.gameObject.SetActive(false);
+                // ダウンロード実行
+                _task = imgDownloader.DownloadImage(
+                    url_header,
+                    mat_header,
+                    Receiver,
+                    info);
+            }
 
             //タイトルを取得
             VRCStringDownloader.LoadUrl(url_json, Receiver);
@@ -512,9 +489,6 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
         else if (reloadStep == 1)
         {
-            //非表示にしたヘッダー用オブジェクトを表示
-            HeaderImage.SetActive(true);
-
             //Cal.SetActive(true);
             DebugLog("Reloaded.");
 
@@ -604,7 +578,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         for (int i = 0; i < start_times.Length; i++)
         {
             //string dayStr = start_times[i].ToString("yyyy-MM-dd (ddd)");
-            string dayStr = DateTimeToString(start_times[i]);
+            string dayStr = dayStrs[i];
             if (string.IsNullOrEmpty(dayStr))
             {
                 DebugLog($"dayStr is empty. {i}");
@@ -678,6 +652,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
+
+        usedDayCount = 0;
+        usedEventCount = 0;
 
         for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
         {
@@ -874,6 +851,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             __rectHeight -= 10;
         }
+        usedDayCount = __loopCount;
+        usedEventCount = __rectNum;
         isOverlapChecking = true;
     }
 
@@ -913,70 +892,42 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             }
             else if (events[i].TokenType == TokenType.DataDictionary)
             {
-                var dics = events[i].DataDictionary;
+                DataDictionary dic = events[i].DataDictionary;
+                DataToken t;
 
-                var keys = dics.GetKeys();
-                var vals = dics.GetValues();
+                if (dic.TryGetValue("id", out t) && t.TokenType == TokenType.String) ids[i] = t.String;
+                if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = t.String;
+                if (dic.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[i] = t.String;
+                if (dic.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("quest", out t) && t.TokenType == TokenType.Boolean) quests[i] = t.Boolean;
+                if (dic.TryGetValue("genres", out t) && t.TokenType == TokenType.DataList) genres[i] = t.DataList;
 
-                for (int j = 0; j < dics.Count; j++)
+                if (dic.TryGetValue("start", out t) && t.TokenType == TokenType.String)
                 {
-                    var key = keys[j];
-                    var val = vals[j];
-
-                    if (val.TokenType == TokenType.String)
+                    if (GetTimeFromStr(t.String, out DateTime _start))
                     {
-                        if (key.String == "id") ids[i] = val.String;
-                        else if (key.String == "title") titles[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "author") authors[i] = val.String;
-                        else if (key.String == "body") bodys[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "condition") conditions[i] = val.String;
-                        else if (key.String == "way") ways[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "note") notes[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "start")
-                        {
-                            string starttime = val.String;
-
-                            GetTimeFromStr(starttime, out DateTime _start);
-                            if (_start == null)
-                            {
-                                DebugLog($"<color=red>Get Time Error start[{j}]</color>");
-                                continue;
-                            }
-
-                            start_times[i] = _start;
-                        }
-                        else if (key.String == "end")
-                        {
-                            string endtime = val.String;
-                            GetTimeFromStr(endtime, out DateTime _end);
-                            if (_end == null)
-                            {
-                                DebugLog($"<color=red>Get Time Error end[{j}]</color>");
-                                continue;
-                            }
-
-                            end_times[i] = _end;
-                        }
+                        start_times[i] = _start;
+                        dayStrs[i] = DateTimeToString(_start);
                     }
-                    else if (val.TokenType == TokenType.DataList) //genres用
+                    else
                     {
-                        if (key.String == "genres")
-                        {
-                            genres[i] = val.DataList;
-                        }
-                        else
-                        {
-                            DebugLog($"Unknown DataList detected {j}");
-                        }
-                    }
-                    else if (val.TokenType == TokenType.Boolean)
-                    {
-                        if (key.String == "quest")
-                        {
-                            quests[i] = val.Boolean;
-                        }
+                        DebugLog($"<color=red>Get Time Error start[{i}]</color>");
                     }
                 }
+
+                if (dic.TryGetValue("end", out t) && t.TokenType == TokenType.String)
+                {
+                    if (GetTimeFromStr(t.String, out DateTime _end))
+                        end_times[i] = _end;
+                    else
+                        DebugLog($"<color=red>Get Time Error end[{i}]</color>");
+                }
+
+                if (genres[i] == null)
+                    genres[i] = new DataList();
             }
         }
 
@@ -1130,8 +1081,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         hasHeaderLoadError = false;
 
         //受け取ったテクスチャをマテリアルへ反映
+        HeaderImage.SetActive(false);
         mat_header.mainTexture = result.Result;
         cacheTexture = result.Result;
+        HeaderImage.SetActive(true);
     }
 
     /// <summary>
@@ -1221,7 +1174,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         _Body.text = bodys[index];
 
         //イベントのジャンルを記載
-        _Genre.text = "";
+        string genreText = "";
         for (int genreIndex = 0; genreIndex < genres[index].Count; genreIndex++)
         {
             if (genres[index][genreIndex].TokenType != TokenType.String)
@@ -1231,12 +1184,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             if (!string.IsNullOrEmpty(_genre))
             {
-                _Genre.text = _Genre.text + _genre;
+                genreText = genreText + _genre;
 
                 if (genreIndex != genres[index].Count - 1)
-                    _Genre.text = _Genre.text + ", ";
+                    genreText = genreText + ", ";
             }
         }
+        _Genre.text = genreText;
 
         //参加条件やモラルを記載
         _Conditions.text = conditions[index];
@@ -1436,10 +1390,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     #region CharacterReference
     private string ReplaceCharacterReference(string text)
     {
-        text = text.Replace("&amp;", "&");
+        if (text.IndexOf('&') < 0)
+            return text;
+
         text = text.Replace("&copy;", "©");
         text = text.Replace("&lt;", "<");
         text = text.Replace("&gt;", ">");
+        text = text.Replace("&amp;", "&");
 
         return text;
     }
