@@ -282,14 +282,26 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private int failCount = 0;
 
     /// <summary>
-    /// /events はサーバー側で60分ごとに切り替わるので、取得は60分に1回(初回・失敗後・Interact時は即時)
+    /// /events はサーバー側で毎正時(:00)に切り替わるので、次の正時の少し後に取得する(初回・失敗後・Interact時は即時)
     /// </summary>
-    private const float EVENTS_REFRESH_INTERVAL = 3600f;
+    private const float EVENTS_SLOT_PERIOD = 3600f;
     private bool eventsDue = true;
     private float nextEventsTime = 0f;
 
-    // /image はサーバー側で5分刻みに切り替わるので、5分ごとのリロードでは毎回取りに行く
-    private const float HEADER_REFRESH_INTERVAL = 300f;
+    /// <summary>
+    /// /image はサーバー側で5分境界(:00, :05, :10...)に切り替わるので、境界の少し後に取得する
+    /// </summary>
+    private const float HEADER_SLOT_PERIOD = 300f;
+
+    /// <summary>
+    /// サーバーはstale-while-revalidateが60秒あるため、枠の切り替わりから最低これだけ待って取得する
+    /// </summary>
+    private const float SLOT_MIN_DELAY = 65f;
+
+    /// <summary>
+    /// 全員が同時にアクセスしないよう、SLOT_MIN_DELAYに加えるランダムなばらつきの最大秒数
+    /// </summary>
+    private const float SLOT_JITTER = 25f;
     private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
@@ -337,7 +349,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //読み込み (初回のみ7秒)
         currentTime += deltaTime;
 
-        if (currentTime > reloadInterval)
+        //通常の再読み込み(初回・失敗後の再試行)に加えて、ヘッダー画像とイベント一覧は
+        //サーバー側の切り替わり(5分境界・正時)の直後に取得する
+        if (reloadStep == 1 || currentTime > reloadInterval
+            || (headerRequested && Time.time >= nextHeaderTime)
+            || (hasData && Time.time >= nextEventsTime))
         {
             reloadCal();
         }
@@ -531,7 +547,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             if (!headerRequested || hasHeaderLoadError || Time.time >= nextHeaderTime)
             {
                 headerRequested = true;
-                nextHeaderTime = Time.time + HEADER_REFRESH_INTERVAL;
+                nextHeaderTime = Time.time + SecondsUntilNextSlot(HEADER_SLOT_PERIOD);
 
                 // ダウンロード実行
                 _task = imgDownloader.DownloadImage(
@@ -541,11 +557,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     info);
             }
 
-            //イベント一覧は60分に1回(初回・失敗後・Interact時は即時)だけ取得する
+            //イベント一覧は毎正時の直後に1回(初回・失敗後・Interact時は即時)だけ取得する
             if (eventsDue || Time.time >= nextEventsTime)
             {
                 eventsDue = false;
-                nextEventsTime = Time.time + EVENTS_REFRESH_INTERVAL;
+                nextEventsTime = Time.time + SecondsUntilNextSlot(EVENTS_SLOT_PERIOD);
                 VRCStringDownloader.LoadUrl(url_json, Receiver);
             }
 
@@ -562,6 +578,23 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             currentTime = 0;
             reloadInterval = 60 * 5; //初回以降は５分に１回更新
         }
+    }
+
+    /// <summary>
+    /// 次に取得する枠(period秒刻み、UTC基準の分と秒)の切り替わりから SLOT_MIN_DELAY + ばらつき だけ後までの秒数を返す。
+    /// 今の枠がすでにSLOT_MIN_DELAYを過ぎていれば最新の内容を取得済みとみなし、次の枠を待つ
+    /// </summary>
+    private float SecondsUntilNextSlot(float period)
+    {
+        DateTime now = DateTime.UtcNow;
+        float s = now.Minute * 60f + now.Second + now.Millisecond * 0.001f;
+        float slotStart = Mathf.Floor(s / period) * period;
+
+        float target = slotStart + SLOT_MIN_DELAY + UnityEngine.Random.Range(0f, SLOT_JITTER);
+        if (s >= slotStart + SLOT_MIN_DELAY)
+            target += period;
+
+        return target - s;
     }
 
     #region Funcs
