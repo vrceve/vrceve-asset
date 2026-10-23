@@ -412,8 +412,69 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         //日付を変換
         string _time = timeStr.Substring(0, _Plus);
+        if (!IsValidTimeStr(_time))
+        {
+            DebugLog($"Invalid time format: {_time}");
+            time = new DateTime();
+            return false;
+        }
+
         time = DateTime.ParseExact(_time, format, null);
         return true;
+    }
+
+    /// <summary>
+    /// ParseExactが例外を出さないよう、yyyy-MM-ddTHH:mm:ss.fff の形式と値の範囲を事前に確認する
+    /// </summary>
+    private bool IsValidTimeStr(string s)
+    {
+        if (s.Length != 23)
+            return false;
+
+        for (int i = 0; i < 23; i++)
+        {
+            char c = s[i];
+            if (i == 4 || i == 7)
+            {
+                if (c != '-') return false;
+            }
+            else if (i == 10)
+            {
+                if (c != 'T') return false;
+            }
+            else if (i == 13 || i == 16)
+            {
+                if (c != ':') return false;
+            }
+            else if (i == 19)
+            {
+                if (c != '.') return false;
+            }
+            else if (c < '0' || c > '9')
+            {
+                return false;
+            }
+        }
+
+        int year = int.Parse(s.Substring(0, 4));
+        int month = int.Parse(s.Substring(5, 2));
+        int day = int.Parse(s.Substring(8, 2));
+        int hour = int.Parse(s.Substring(11, 2));
+        int minute = int.Parse(s.Substring(14, 2));
+        int second = int.Parse(s.Substring(17, 2));
+
+        if (year < 1 || month < 1 || month > 12 || day < 1)
+            return false;
+        if (hour > 23 || minute > 59 || second > 59)
+            return false;
+
+        int maxDay = 31;
+        if (month == 4 || month == 6 || month == 9 || month == 11)
+            maxDay = 30;
+        else if (month == 2)
+            maxDay = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 29 : 28;
+
+        return day <= maxDay;
     }
 
     /// <summary>
@@ -830,6 +891,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
 
         checkboxLen = genres_filterlist.Count;
+        if (checkboxLen > MAX_GENRE_LENGTH)
+            checkboxLen = MAX_GENRE_LENGTH;
         for (int i = 0; i < checkboxLen; i++)
         {
             string genreName = (string)genres_filterlist[i];
@@ -868,7 +931,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         genres_eventcount = _genres.GetValues();
         //genres_filterToggle = new bool[genres_filterlist.Count];
 
-        for (int i = 0; i < genres_filterlist.Count; i++)
+        for (int i = 0; i < genres_filterlist.Count && i < MAX_GENRE_LENGTH; i++)
         {
             string genreName = (string)genres_filterlist[i];
             string genreCount = ((double)genres_eventcount[i]).ToString();
@@ -1287,8 +1350,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
         }
 
-        for (int i = 0; i < genres_filterlist.Count; i++)
+        for (int i = 0; i < genres_filterlist.Count && i < MAX_GENRE_LENGTH; i++)
         {
+            if (checkboxes[i] == null)
+                continue;
+
             checkboxes[i].toggleisON(false);
         }
 
@@ -1313,8 +1379,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return text;
 
         text = text.Replace("&copy;", "©");
-        text = text.Replace("&lt;", "<");
-        text = text.Replace("&gt;", ">");
+        //'<' '>'に戻すとリッチテキストのタグとして解釈されてしまうため、全角に置き換える
+        text = text.Replace("&lt;", "＜");
+        text = text.Replace("&gt;", "＞");
         text = text.Replace("&amp;", "&");
 
         return text;
