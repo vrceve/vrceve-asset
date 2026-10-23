@@ -289,7 +289,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private float nextEventsTime = 0f;
 
     // /image はサーバー側で5分刻みに切り替わるので、5分ごとのリロードでは毎回取りに行く
-    private const float HEADER_REFRESH_INTERVAL = 240f;
+    private const float HEADER_REFRESH_INTERVAL = 300f;
     private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
