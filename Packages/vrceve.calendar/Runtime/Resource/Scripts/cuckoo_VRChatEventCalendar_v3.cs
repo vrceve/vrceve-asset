@@ -281,7 +281,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
     private int failCount = 0;
 
-    private const float HEADER_REFRESH_INTERVAL = 3600f;
+    // /image はサーバー側で5分刻みに切り替わるので、5分ごとのリロードでは毎回取りに行く
+    private const float HEADER_REFRESH_INTERVAL = 240f;
     private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
@@ -456,7 +457,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             lastReloadStart = Time.time;
 
-            // ヘッダー画像は初回・失敗時・1時間ごとにだけ取得する
+            // ヘッダー画像は5分刻みで変わるが、Interact連打などの短い間隔での再取得は避ける
             if (!headerRequested || hasHeaderLoadError || Time.time >= nextHeaderTime)
             {
                 headerRequested = true;
