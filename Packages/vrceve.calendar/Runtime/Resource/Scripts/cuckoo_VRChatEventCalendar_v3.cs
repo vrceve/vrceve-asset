@@ -676,6 +676,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             lastReloadStart = Time.time;
 
+            //タイマーは取得を始めた時点でリセットする。取得がキャッシュから即座に返ると
+            //次のループより先に成功・失敗の処理が走るため、ここで戻しておかないと
+            //一覧の再構築がスキップされたり、失敗時の再試行間隔が上書きされたりする
+            currentTime = 0;
+            reloadInterval = 60 * 5; //初回以降は５分に１回更新
+
             // ヘッダー画像は5分刻みで変わるが、Interact連打などの短い間隔での再取得は避ける
             if (!headerRequested || hasHeaderLoadError || NowTicks() >= nextHeaderTicks)
             {
@@ -707,10 +713,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         {
             //Cal.SetActive(true);
 
-            //タイマーをリセット
             reloadStep = 0;
-            currentTime = 0;
-            reloadInterval = 60 * 5; //初回以降は５分に１回更新
         }
     }
 
