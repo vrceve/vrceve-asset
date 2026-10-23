@@ -333,9 +333,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private string[] weekdayNames = new string[] { "日", "月", "火", "水", "木", "金", "土" };
 
     /// <summary>
-    /// ヘッダー画像を次に取得してよい時刻(Time.time)
+    /// ヘッダー画像を次に取得してよい時刻(UTCの実時間のTicks。Time.timeはウィンドウ非フォーカスやQuestの装着解除で止まるため使わない)
     /// </summary>
-    private float nextHeaderTime = 0f;
+    private long nextHeaderTicks = 0;
     private bool headerRequested = false;
 
     private float lastReloadStart = -1000f;
@@ -357,7 +357,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     private const float EVENTS_SLOT_PERIOD = 3600f;
     private bool eventsDue = true;
-    private float nextEventsTime = 0f;
+    private long nextEventsTicks = 0;
 
     /// <summary>
     /// /image はサーバー側で5分境界(:00, :05, :10...)に切り替わるので、境界の少し後に取得する
@@ -494,8 +494,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //通常の再読み込み(初回・失敗後の再試行)に加えて、ヘッダー画像とイベント一覧は
         //サーバー側の切り替わり(5分境界・正時)の直後に取得する
         if (reloadStep == 1 || currentTime > reloadInterval
-            || (headerRequested && Time.time >= nextHeaderTime)
-            || (hasData && Time.time >= nextEventsTime))
+            || (headerRequested && NowTicks() >= nextHeaderTicks)
+            || (hasData && NowTicks() >= nextEventsTicks))
         {
             reloadCal();
         }
@@ -513,7 +513,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
 
         eventsDue = true;
-        nextHeaderTime = 0f;
+        nextHeaderTicks = 0;
         currentTime = reloadInterval + 1;
         reloadStep = 0;
     }
@@ -667,7 +667,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         if (reloadStep == 0)
         {
             //一覧を取得するときに、詳細の取得中や直前の取得から5秒未満なら待つ
-            if ((eventsDue || Time.time >= nextEventsTime) && !CanLoadString())
+            if ((eventsDue || NowTicks() >= nextEventsTicks) && !CanLoadString())
                 return;
 
             //初回(データ未取得)のときだけローディングを表示し、取得済みなら今の表示を保ったまま裏で更新する
@@ -677,10 +677,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             lastReloadStart = Time.time;
 
             // ヘッダー画像は5分刻みで変わるが、Interact連打などの短い間隔での再取得は避ける
-            if (!headerRequested || hasHeaderLoadError || Time.time >= nextHeaderTime)
+            if (!headerRequested || hasHeaderLoadError || NowTicks() >= nextHeaderTicks)
             {
                 headerRequested = true;
-                nextHeaderTime = Time.time + SecondsUntilNextSlot(HEADER_SLOT_PERIOD);
+                nextHeaderTicks = TicksAfter(SecondsUntilNextSlot(HEADER_SLOT_PERIOD));
 
                 // ダウンロード実行
                 _task = imgDownloader.DownloadImage(
@@ -691,10 +691,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             }
 
             //イベント一覧は毎正時の直後に1回(初回・失敗後・Interact時は即時)だけ取得する
-            if (eventsDue || Time.time >= nextEventsTime)
+            if (eventsDue || NowTicks() >= nextEventsTicks)
             {
                 eventsDue = false;
-                nextEventsTime = Time.time + SecondsUntilNextSlot(EVENTS_SLOT_PERIOD);
+                nextEventsTicks = TicksAfter(SecondsUntilNextSlot(EVENTS_SLOT_PERIOD));
                 listLoading = true;
                 lastStringLoadTime = Time.time;
                 VRCStringDownloader.LoadUrl(url_json, Receiver);
@@ -712,6 +712,19 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             currentTime = 0;
             reloadInterval = 60 * 5; //初回以降は５分に１回更新
         }
+    }
+
+    private long NowTicks()
+    {
+        return DateTime.UtcNow.Ticks;
+    }
+
+    /// <summary>
+    /// 今からseconds秒後の時刻(UTCのTicks)
+    /// </summary>
+    private long TicksAfter(float seconds)
+    {
+        return DateTime.UtcNow.Ticks + (long)((double)seconds * 10000000.0);
     }
 
     /// <summary>
@@ -1537,7 +1550,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         if (versionDiffers && listRefetchFor != detailsVersion)
         {
             listRefetchFor = detailsVersion;
-            nextEventsTime = Time.time + STRING_LOAD_GAP;
+            nextEventsTicks = TicksAfter(STRING_LOAD_GAP);
         }
 
         //詳細ボックスを開いている場合は描き直す
