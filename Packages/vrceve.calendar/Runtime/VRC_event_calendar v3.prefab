@@ -100323,7 +100323,7 @@ MonoBehaviour:
   url_header:
     url: https://vrceve.poly.jp/image
   url_json:
-    url: https://vrceve.poly.jp/events
+    url: https://vrceve.poly.jp/events/list
   Content: {fileID: 183076961944516118}
   Receiver: {fileID: 6996259708349368224}
   _scrollRect: {fileID: 7914756329855353957}
