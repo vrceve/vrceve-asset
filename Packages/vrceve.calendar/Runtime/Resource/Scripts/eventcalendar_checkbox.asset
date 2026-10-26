@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c333ccfdd0cbdbc4ca30cef2dd6e6b9b, type: 3}
   m_Name: eventcalendar_checkbox
   m_EditorClassIdentifier: 
-  serializedUdonProgramAsset: {fileID: 11400000, guid: eb8a2fed823766146b23b9f0fc2cc95c,
+  serializedUdonProgramAsset: {fileID: 11400000, guid: 462bb84e11c0dc2449db098aecb55a6c,
     type: 2}
   udonAssembly: 
   assemblyError: 
