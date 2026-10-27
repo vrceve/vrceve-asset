@@ -22,7 +22,17 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private const int MAX_GENRE_LENGTH = 16;
     private const int MAX_DAYHEADER_LENGTH = 10;
 
-    private const float CHECK_OVERLAP_COOLTIME = 0.3f;
+    /// <summary>
+    /// 近くにいる間のUpdateLoopの間隔(秒)
+    /// </summary>
+    private const float LOOP_INTERVAL = 0.25f;
+
+    /// <summary>
+    /// スクロール時に表示範囲を更新する最短の間隔(秒)
+    /// </summary>
+    private const float VISIBLE_UPDATE_INTERVAL = 0.1f;
+
+    private const int MAX_ROWS = MAX_DAYHEADER_LENGTH + MAX_EVENT_LENGTH;
 
     private const string FORMAT_TIME_WITHOUT_SECOND = "HH:mm";
 
@@ -63,6 +73,16 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// 前回のリロードからの経過時間
     /// </summary>
     public float currentTime = 0f;
+
+    /// <summary>
+    /// ONの場合、最初の1回の読み込みのあとは、プレイヤーがこの範囲内にいる間だけ更新処理を行う(負荷軽減、特にQuest向け)
+    /// </summary>
+    public bool useActiveRange = true;
+
+    /// <summary>
+    /// 更新処理を行う範囲(メートル)。このオブジェクトの位置からの距離
+    /// </summary>
+    public float activeRange = 5f;
 
     /// <summary>
     /// リロード中のステップ？ 1f遅らせてreloadCalを動かすためにあるかも
@@ -109,6 +129,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// イベントのデータが入ってるJsonを取得するリンク
     /// </summary>
     [SerializeField] VRCUrl url_json;
+
+    /// <summary>
+    /// 詳細(body, condition, way, note)を取得するURL。空の場合は一覧に含まれる詳細をそのまま使う(旧形式)
+    /// </summary>
+    [SerializeField] VRCUrl url_details;
 
     /// <summary>
     /// イベントのリストを表示するところの親オブジェクト
@@ -247,10 +272,161 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     private eventcalendar_checkbox[] checkboxes = new eventcalendar_checkbox[MAX_GENRE_LENGTH];
     private Text[] checkboxTexts = new Text[MAX_GENRE_LENGTH];
 
-    private bool isOverlapChecking = false;
-    private float checkOverlapCooltime = 0.0f;
+    private Vector3[] worldCorners = new Vector3[4];
 
-    private DateTime lastUpdateTime;
+    //---- 表示範囲の計算用(行は 日付見出し→その日のイベント… の順で、上から下へ並ぶ)
+    /// <summary>
+    /// 日付見出し・イベントボタンそれぞれの、自身の位置(localPosition)から見た上下の端
+    /// </summary>
+    private float[] dayRectLo = new float[MAX_DAYHEADER_LENGTH];
+    private float[] dayRectHi = new float[MAX_DAYHEADER_LENGTH];
+    private float[] eventRectLo = new float[MAX_EVENT_LENGTH];
+    private float[] eventRectHi = new float[MAX_EVENT_LENGTH];
+
+    private int rowCount = 0;
+    private bool[] rowIsEvent = new bool[MAX_ROWS];
+    private int[] rowSlot = new int[MAX_ROWS];
+    private float[] rowPosY = new float[MAX_ROWS];
+    private float[] rowLo = new float[MAX_ROWS];
+    private float[] rowHi = new float[MAX_ROWS];
+
+    /// <summary>
+    /// 現在表示している行の範囲(visFirst〜visLast)。空のときはvisLast &lt; visFirst
+    /// </summary>
+    private int visFirst = 0;
+    private int visLast = -1;
+
+    /// <summary>
+    /// viewportの上端(contentの親の座標系)とviewportの高さ(contentの座標系)。レイアウト時に1回だけ計算する
+    /// </summary>
+    private float viewTopInParent = 0f;
+    private float viewHeightLocal = 0f;
+    private float contentScaleY = 1f;
+
+    private float lastVisibleUpdate = -1000f;
+    private bool visibleUpdatePending = false;
+
+    /// <summary>
+    /// ボタン(slot)に割り当てるイベントindexと、実際にテキストを設定済みのイベントindex
+    /// </summary>
+    private int[] slotEventIndex = new int[MAX_EVENT_LENGTH];
+    private int[] slotFilledIndex = new int[MAX_EVENT_LENGTH];
+    private int usedDayCount = 0;
+    private int usedEventCount = 0;
+
+    /// <summary>
+    /// 各イベントの開始日文字列(yyyy-MM-dd (曜))。受信時に1回だけ作る
+    /// </summary>
+    string[] dayStrs;
+
+    /// <summary>
+    /// 各イベントの時刻表示文字列(HH:mm ~ HH:mm)。受信時に1回だけ作る
+    /// </summary>
+    string[] timeStrs;
+
+    /// <summary>
+    /// 直前のイベントの日付部分(yyyy-MM-dd)とその表示文字列。同じ日付なら再利用する
+    /// </summary>
+    private string lastDatePart = "";
+    private string lastDayStr = "";
+
+    private string[] weekdayNames = new string[] { "日", "月", "火", "水", "木", "金", "土" };
+
+    /// <summary>
+    /// ヘッダー画像を次に取得してよい時刻(UTCの実時間のTicks。Time.timeはウィンドウ非フォーカスやQuestの装着解除で止まるため使わない)
+    /// </summary>
+    private long nextHeaderTicks = 0;
+    private bool headerRequested = false;
+
+    private float lastReloadStart = -1000f;
+
+    /// <summary>
+    /// 前回正常に展開できたJson。同じ内容なら再構築しない
+    /// </summary>
+    private string lastJson = null;
+
+    /// <summary>
+    /// 一度でも正常にデータを取得できたらTrue
+    /// </summary>
+    private bool hasData = false;
+
+    private int failCount = 0;
+
+    /// <summary>
+    /// /events はサーバー側で毎正時(:00)に切り替わるので、次の正時の少し後に取得する(初回・失敗後・Interact時は即時)
+    /// </summary>
+    private const float EVENTS_SLOT_PERIOD = 3600f;
+    private bool eventsDue = true;
+    private long nextEventsTicks = 0;
+
+    /// <summary>
+    /// /image はサーバー側で5分境界(:00, :05, :10...)に切り替わるので、境界の少し後に取得する
+    /// </summary>
+    private const float HEADER_SLOT_PERIOD = 300f;
+
+    /// <summary>
+    /// サーバーはstale-while-revalidateが60秒あるため、枠の切り替わりから最低これだけ待って取得する
+    /// </summary>
+    private const float SLOT_MIN_DELAY = 65f;
+
+    /// <summary>
+    /// 全員が同時にアクセスしないよう、SLOT_MIN_DELAYに加えるランダムなばらつきの最大秒数
+    /// </summary>
+    private const float SLOT_JITTER = 25f;
+
+    /// <summary>
+    /// 範囲から出たときにすぐ切り替わらないよう、範囲内→範囲外の判定にだけ足す余裕(メートル)
+    /// </summary>
+    private const float ACTIVE_RANGE_MARGIN = 3f;
+
+    /// <summary>
+    /// 範囲外のときの、範囲内に入ったかの確認間隔(秒)
+    /// </summary>
+    private const float FAR_CHECK_INTERVAL = 1f;
+
+    private bool isNear = true;
+    private float lastLoopTime = 0f;
+
+    /// <summary>
+    /// VRCStringDownloaderの5秒制限を守るための、取得間隔と取得中フラグ
+    /// </summary>
+    private const float STRING_LOAD_GAP = 5.5f;
+    private float lastStringLoadTime = -1000f;
+    private bool listLoading = false;
+    private bool detailsLoading = false;
+
+    /// <summary>
+    /// 一覧に詳細が含まれていた(旧形式)場合はTrue。この場合は詳細を取得しない
+    /// </summary>
+    private bool inlineDetails = false;
+
+    private string listVersion = "";
+    private string detailsVersion = "";
+    private DataDictionary detailsDict = null;
+
+    /// <summary>
+    /// 詳細の取得待ちのイベントID。取得が終わったら詳細ボックスを描き直す
+    /// </summary>
+    private string pendingDetailId = null;
+    private bool pendingDetailsRequest = false;
+    private float nextDetailsAllowed = 0f;
+    private int detailFailCount = 0;
+
+    /// <summary>
+    /// 一覧のversionが変わったあと、古い詳細を取り直す要求を出したversion
+    /// </summary>
+    private string detailsRefreshedFor = "";
+
+    /// <summary>
+    /// versionの食い違いで一覧を取り直す要求を出した詳細側のversion
+    /// </summary>
+    private string listRefetchFor = "";
+
+    /// <summary>
+    /// 詳細ボックスに今表示しているイベントのindex(表示していなければ-1)
+    /// </summary>
+    private int drawnIndex = -1;
+    private const float INTERACT_RELOAD_COOLDOWN = 30f;
     #endregion
 
     #region Internal Func
@@ -277,7 +453,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         //Androidモードかチェック
         CheckIsAndroid();
 
-        lastUpdateTime = DateTime.Now;
+        lastLoopTime = Time.time;
 
         //ループ開始
         UpdateLoop();
@@ -294,46 +470,37 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public void UpdateLoop()
     {
-        float deltaTime = (float)(DateTime.Now - lastUpdateTime).TotalSeconds;
+        //範囲外のときはループ間隔が空くため、実際の経過時間を使う
+        float deltaTime = Time.time - lastLoopTime;
+        lastLoopTime = Time.time;
+
+        //最初の1回の読み込みが終わったあと、範囲外にいる間は何もしない(読み込み中のものは最後まで進める)
+        if (useActiveRange && hasData && reloadStep == 0)
+        {
+            UpdateIsNear();
+            if (!isNear)
+            {
+                SendCustomEventDelayedSeconds(nameof(UpdateLoop), FAR_CHECK_INTERVAL, VRC.Udon.Common.Enums.EventTiming.Update);
+                return;
+            }
+        }
+
+        //詳細の取得待ちがあれば、5秒制限を守れるタイミングで取得する
+        TryDispatchDetails();
 
         //読み込み (初回のみ7秒)
         currentTime += deltaTime;
 
-        if (currentTime > reloadInterval)
+        //通常の再読み込み(初回・失敗後の再試行)に加えて、ヘッダー画像とイベント一覧は
+        //サーバー側の切り替わり(5分境界・正時)の直後に取得する
+        if (reloadStep == 1 || currentTime > reloadInterval
+            || (headerRequested && NowTicks() >= nextHeaderTicks)
+            || (hasData && NowTicks() >= nextEventsTicks))
         {
             reloadCal();
         }
 
-        //Overlap CheckLoop
-        if (checkOverlapCooltime > 0)
-            checkOverlapCooltime -= deltaTime;
-
-        if (0 >= checkOverlapCooltime && isOverlapChecking)
-        {
-            for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
-            {
-                if (dayHeaders[i] == null)
-                    continue;
-
-                dayHeaders[i].gameObject.SetActive(IsOverlapping(dayHeaders[i], _scrollRect.viewport));
-                //dayHeaders[i].gameObject.SetActive(IsVisibleInViewport(dayHeaders[i], _scrollRect.viewport));
-            }
-
-            for (int i = 0; i < MAX_EVENT_LENGTH; i++)
-            {
-                if (eventButtons[i] == null)
-                    continue;
-
-                eventButtons[i].gameObject.SetActive(IsOverlapping(eventButtons[i], _scrollRect.viewport));
-                //eventButtons[i].gameObject.SetActive(IsVisibleInViewport(eventButtons[i], _scrollRect.viewport));
-            }
-
-            checkOverlapCooltime = CHECK_OVERLAP_COOLTIME;
-            isOverlapChecking = false;
-        }
-
-        lastUpdateTime = DateTime.Now;
-        SendCustomEventDelayedFrames(nameof(UpdateLoop), 1, VRC.Udon.Common.Enums.EventTiming.Update);
+        SendCustomEventDelayedSeconds(nameof(UpdateLoop), LOOP_INTERVAL, VRC.Udon.Common.Enums.EventTiming.Update);
     }
     #endregion
 
@@ -342,33 +509,33 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     public override void Interact()
     {
+        if (Time.time - lastReloadStart < INTERACT_RELOAD_COOLDOWN)
+            return;
+
+        eventsDue = true;
+        nextHeaderTicks = 0;
         currentTime = reloadInterval + 1;
         reloadStep = 0;
     }
 
+    /// <summary>
+    /// ローカルプレイヤーがこのオブジェクトの範囲内にいるかを更新する
+    /// </summary>
+    private void UpdateIsNear()
+    {
+        VRCPlayerApi player = Networking.LocalPlayer;
+        if (!Utilities.IsValid(player))
+        {
+            isNear = true;
+            return;
+        }
+
+        float distance = Vector3.Distance(player.GetPosition(), transform.position);
+        float limit = isNear ? activeRange + ACTIVE_RANGE_MARGIN : activeRange;
+        isNear = distance <= limit;
+    }
+
     #region Optimize Func
-
-    public static Rect GetWorldRect(RectTransform rectTransform)
-    {
-        Vector3[] corners = new Vector3[4];
-        rectTransform.GetWorldCorners(corners);
-
-        Vector3 position = corners[0];
-
-        Vector2 size = new Vector2(
-            rectTransform.lossyScale.x * rectTransform.rect.size.x,
-            rectTransform.lossyScale.y * rectTransform.rect.size.y);
-
-        return new Rect(position, size);
-    }
-
-    public bool IsOverlapping(RectTransform rectTransform1, RectTransform rectTransform2)
-    {
-        Rect rect1 = GetWorldRect(rectTransform1);
-        Rect rect2 = GetWorldRect(rectTransform2);
-
-        return rect1.Overlaps(rect2);
-    }
 
     #endregion
 
@@ -378,19 +545,91 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// </summary>
     /// <param name="timeStr"></param>
     /// <param name="time"></param>
-    private void GetTimeFromStr(string timeStr, out DateTime time)
+    private bool GetTimeFromStr(string timeStr, out DateTime time)
     {
         int _Plus = timeStr.IndexOf('+');
         if (_Plus == -1)
         {
             DebugLog("Plus is not found");
             time = new DateTime();
-            return;
+            return false;
         }
 
         //日付を変換
         string _time = timeStr.Substring(0, _Plus);
-        time = DateTime.ParseExact(_time, format, null);
+        return TryParseTimeStr(_time, out time);
+    }
+
+    /// <summary>
+    /// s の start から len 桁の数字を整数にする(数字であることは確認済みの前提)
+    /// </summary>
+    private int Num(string s, int start, int len)
+    {
+        int n = 0;
+        for (int i = 0; i < len; i++)
+            n = n * 10 + ((int)s[start + i] - 48);
+        return n;
+    }
+
+    /// <summary>
+    /// yyyy-MM-ddTHH:mm:ss.fff の形式と値の範囲を確認し、問題なければDateTimeを直接作る(ParseExactは使わない)
+    /// </summary>
+    private bool TryParseTimeStr(string s, out DateTime time)
+    {
+        time = new DateTime();
+
+        if (s.Length != 23)
+            return false;
+
+        for (int i = 0; i < 23; i++)
+        {
+            char c = s[i];
+            if (i == 4 || i == 7)
+            {
+                if (c != '-') return false;
+            }
+            else if (i == 10)
+            {
+                if (c != 'T') return false;
+            }
+            else if (i == 13 || i == 16)
+            {
+                if (c != ':') return false;
+            }
+            else if (i == 19)
+            {
+                if (c != '.') return false;
+            }
+            else if (c < '0' || c > '9')
+            {
+                return false;
+            }
+        }
+
+        int year = Num(s, 0, 4);
+        int month = Num(s, 5, 2);
+        int day = Num(s, 8, 2);
+        int hour = Num(s, 11, 2);
+        int minute = Num(s, 14, 2);
+        int second = Num(s, 17, 2);
+        int millisecond = Num(s, 20, 3);
+
+        if (year < 1 || month < 1 || month > 12 || day < 1)
+            return false;
+        if (hour > 23 || minute > 59 || second > 59)
+            return false;
+
+        int maxDay = 31;
+        if (month == 4 || month == 6 || month == 9 || month == 11)
+            maxDay = 30;
+        else if (month == 2)
+            maxDay = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 29 : 28;
+
+        if (day > maxDay)
+            return false;
+
+        time = new DateTime(year, month, day, hour, minute, second, millisecond);
+        return true;
     }
 
     /// <summary>
@@ -409,58 +648,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         ways = new string[count];
         notes = new string[count];
         ids = new string[count];
+        dayStrs = new string[count];
+        timeStrs = new string[count];
         genres = new DataList[count];
-    }
 
-    /// <summary>
-    /// 日付からその日のイベントデータだけを返す
-    /// </summary>
-    /// <param name="dateStr">日付</param>
-    /// <returns></returns>
-    private DataList getIDsbyDate(string dateStr)
-    {
-        DataList ret = new DataList();
-        for (int i = 0; i < start_times.Length; i++)
-        {
-            //string startTimeStr = start_times[i].ToString("yyyy-MM-dd (ddd)");
-            string startTimeStr = DateTimeToString(start_times[i]);
-
-            if (string.IsNullOrEmpty(startTimeStr))
-            {
-                DebugLog($"startTimeStr is empty. {i}");
-                continue;
-            }
-
-            if (dateStr == startTimeStr)
-                ret.Add(ids[i]);
-        }
-
-        return ret;
-    }
-
-    private string DateTimeToString(DateTime time)
-    {
-        if (time == null)
-            return "";
-
-        string timeStr = time.ToString("yyyy-MM-dd");
-
-        if (time.DayOfWeek == DayOfWeek.Monday)
-            timeStr += " (月)";
-        else if (time.DayOfWeek == DayOfWeek.Tuesday)
-            timeStr += " (火)";
-        else if (time.DayOfWeek == DayOfWeek.Wednesday)
-            timeStr += " (水)";
-        else if (time.DayOfWeek == DayOfWeek.Thursday)
-            timeStr += " (木)";
-        else if (time.DayOfWeek == DayOfWeek.Friday)
-            timeStr += " (金)";
-        else if (time.DayOfWeek == DayOfWeek.Saturday)
-            timeStr += " (土)";
-        else if (time.DayOfWeek == DayOfWeek.Sunday)
-            timeStr += " (日)";
-
-        return timeStr;
+        //イベントの内容が入れ替わるので、ボタンに設定済みのテキストは無効にする
+        for (int i = 0; i < MAX_EVENT_LENGTH; i++)
+            slotFilledIndex[i] = -1;
     }
     #endregion
 
@@ -470,59 +664,87 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     public void reloadCal()
     {
         //エラーが起きた場合は再リロードさせる
-        DebugLog("Calling reload.");
         if (reloadStep == 0)
         {
-            isReloading = true;
+            //一覧を取得するときに、詳細の取得中や直前の取得から5秒未満なら待つ
+            if ((eventsDue || NowTicks() >= nextEventsTicks) && !CanLoadString())
+                return;
 
-            //詳細情報を表示するボックスが表示されている場合は非表示
-            closeContentBox();
+            //初回(データ未取得)のときだけローディングを表示し、取得済みなら今の表示を保ったまま裏で更新する
+            if (!hasData)
+                NOWLOADING.SetActive(true);
 
-            DebugLog("Reset Button Position.");
-            ResetButton();
+            lastReloadStart = Time.time;
 
-            //位置をリセット
+            //タイマーは取得を始めた時点でリセットする。取得がキャッシュから即座に返ると
+            //次のループより先に成功・失敗の処理が走るため、ここで戻しておかないと
+            //一覧の再構築がスキップされたり、失敗時の再試行間隔が上書きされたりする
+            currentTime = 0;
+            reloadInterval = 60 * 5; //初回以降は５分に１回更新
 
-            DebugLog("Reset Event Datas.");
-            InitializeEventDatas(0);
+            // ヘッダー画像は5分刻みで変わるが、Interact連打などの短い間隔での再取得は避ける
+            if (!headerRequested || hasHeaderLoadError || NowTicks() >= nextHeaderTicks)
+            {
+                headerRequested = true;
+                nextHeaderTicks = TicksAfter(SecondsUntilNextSlot(HEADER_SLOT_PERIOD));
 
-            NOWLOADING.SetActive(true);
+                // ダウンロード実行
+                _task = imgDownloader.DownloadImage(
+                    url_header,
+                    mat_header,
+                    Receiver,
+                    info);
+            }
 
-            //一度非表示にしないとマテリアルが反映されないため？ 非表示
-            HeaderImage.SetActive(false);
-
-            // ダウンロード実行
-            _task = imgDownloader.DownloadImage(
-                url_header,
-                mat_header,
-                Receiver,
-                info);
-
-            foreach (var dayHeader in dayHeaders)
-                dayHeader.gameObject.SetActive(false);
-
-            foreach (var eventButton in eventButtons)
-                eventButton.gameObject.SetActive(false);
-
-            //タイトルを取得
-            VRCStringDownloader.LoadUrl(url_json, Receiver);
+            //イベント一覧は毎正時の直後に1回(初回・失敗後・Interact時は即時)だけ取得する
+            if (eventsDue || NowTicks() >= nextEventsTicks)
+            {
+                eventsDue = false;
+                nextEventsTicks = TicksAfter(SecondsUntilNextSlot(EVENTS_SLOT_PERIOD));
+                listLoading = true;
+                lastStringLoadTime = Time.time;
+                VRCStringDownloader.LoadUrl(url_json, Receiver);
+            }
 
             //処理をdeltaTime分ずらすため？
             reloadStep = 1;
         }
         else if (reloadStep == 1)
         {
-            //非表示にしたヘッダー用オブジェクトを表示
-            HeaderImage.SetActive(true);
-
             //Cal.SetActive(true);
-            DebugLog("Reloaded.");
 
-            //タイマーをリセット
             reloadStep = 0;
-            currentTime = 0;
-            reloadInterval = 60 * 5; //初回以降は５分に１回更新
         }
+    }
+
+    private long NowTicks()
+    {
+        return DateTime.UtcNow.Ticks;
+    }
+
+    /// <summary>
+    /// 今からseconds秒後の時刻(UTCのTicks)
+    /// </summary>
+    private long TicksAfter(float seconds)
+    {
+        return DateTime.UtcNow.Ticks + (long)((double)seconds * 10000000.0);
+    }
+
+    /// <summary>
+    /// 次に取得する枠(period秒刻み、UTC基準の分と秒)の切り替わりから SLOT_MIN_DELAY + ばらつき だけ後までの秒数を返す。
+    /// 今の枠がすでにSLOT_MIN_DELAYを過ぎていれば最新の内容を取得済みとみなし、次の枠を待つ
+    /// </summary>
+    private float SecondsUntilNextSlot(float period)
+    {
+        DateTime now = DateTime.UtcNow;
+        float s = now.Minute * 60f + now.Second + now.Millisecond * 0.001f;
+        float slotStart = Mathf.Floor(s / period) * period;
+
+        float target = slotStart + SLOT_MIN_DELAY + UnityEngine.Random.Range(0f, SLOT_JITTER);
+        if (s >= slotStart + SLOT_MIN_DELAY)
+            target += period;
+
+        return target - s;
     }
 
     #region Funcs
@@ -589,73 +811,53 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
 
     /// <summary>
-    /// イベントデータを日付によって分ける
+    /// イベントデータを日付によって分ける。[日付文字列, イベントindexのリスト] のリストを返す
     /// </summary>
-    /// <param name="isQuest">クエスト対応のみ分けるか</param>
-    /// <param name="genreFilters">ジャンルフィルター</param>
-    /// <returns></returns>
     private DataList splitArrayByDate(bool isQuest = false, DataList genreFilters = null)
     {
-        //DataListの中に日付ごとにIDを分ける
-        //DataListの中に入るDataTokenには日付のstringとIDを入れる
+        if (genreFilters.Count == 0)
+            return null;
 
-        //なのでまず何日分あるかを判定する
         DataList dayStrings = new DataList();
-        for (int i = 0; i < start_times.Length; i++)
+        DataList dayIndexLists = new DataList();
+        for (int i = 0; i < dayStrs.Length; i++)
         {
-            //string dayStr = start_times[i].ToString("yyyy-MM-dd (ddd)");
-            string dayStr = DateTimeToString(start_times[i]);
+            string dayStr = dayStrs[i];
             if (string.IsNullOrEmpty(dayStr))
             {
                 DebugLog($"dayStr is empty. {i}");
                 continue;
             }
 
-            if (genreFilters.Count == 0)
-                continue;
-
-            //ジャンルにマッチしないイベントな場合はスキップ
             if (!checkGenre(genres[i], genreFilters))
                 continue;
 
             if (isQuest && !quests[i])
                 continue;
 
-            if (dayStrings.IndexOf(dayStr) == -1)
+            int d = dayStrings.IndexOf(dayStr);
+            if (d == -1)
             {
                 dayStrings.Add(dayStr);
+                DataList indexList = new DataList();
+                indexList.Add(i);
+                dayIndexLists.Add(indexList);
+            }
+            else
+            {
+                dayIndexLists[d].DataList.Add(i);
             }
         }
 
-        int dayCount = dayStrings.Count;
-
-        //0以下の場合は完全に取得出来ていないためそのまま返す
-        if (dayCount < 1)
-        {
+        if (dayStrings.Count < 1)
             return null;
-        }
 
-        /*
-         * DataList 
-         *      [0]
-         *       |---- 日付のデータ
-         *       |---- EventIDのリスト
-         *      [1]
-         *       |---- 日付のデータ
-         *       |---- EventIDのリスト
-        */
-
-        //IDを抱えるためのDataListを作る
         DataList splitedArray = new DataList();
-        for (int i = 0; i < dayCount; i++)
+        for (int i = 0; i < dayStrings.Count; i++)
         {
-            string dayStr = dayStrings[i].ToString();
-            DataList idList = getIDsbyDate(dayStr);
-
             DataList splited = new DataList();
-            splited.Add(dayStr);
-            splited.Add(idList);
-
+            splited.Add(dayStrings[i]);
+            splited.Add(dayIndexLists[i]);
             splitedArray.Add(splited);
         }
 
@@ -663,7 +865,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
 
     /// <summary>
-    /// ボタンの位置を初期位置へ(見えないところへ移動してる)
+    /// 全てのボタンを非表示にして見えない位置へ移動する(起動時に1回だけ)
     /// </summary>
     private void ResetButton()
     {
@@ -678,6 +880,12 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         //見えない位置へ移動
         dayHeaderPosition.x = dayHeaderPosition.x + 1500;
+
+        rowCount = 0;
+        visFirst = 0;
+        visLast = -1;
+        usedDayCount = 0;
+        usedEventCount = 0;
 
         for (int i = 0; i < MAX_DAYHEADER_LENGTH; i++)
         {
@@ -699,15 +907,164 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     }
 
     /// <summary>
+    /// 再構築の前に、表示中の行だけを非表示にして行の情報を空にする(表示していない行は元から非表示)
+    /// </summary>
+    private void ResetRows()
+    {
+        RectTransform RectTransformContent = Content.GetComponent<RectTransform>();
+
+        if (RectTransformContent != null)
+            RectTransformContent.localPosition = new Vector3(5, 0, 0);
+
+        for (int r = visFirst; r <= visLast; r++)
+            SetRowActive(r, false);
+
+        rowCount = 0;
+        visFirst = 0;
+        visLast = -1;
+        usedDayCount = 0;
+        usedEventCount = 0;
+    }
+
+    /// <summary>
+    /// 行の表示・非表示を切り替える。表示するときに位置とテキストを設定する
+    /// </summary>
+    private void SetRowActive(int r, bool active)
+    {
+        int slot = rowSlot[r];
+        RectTransform rt = rowIsEvent[r] ? eventButtons[slot] : dayHeaders[slot];
+        if (rt == null)
+            return;
+
+        if (active)
+        {
+            rt.localPosition = new Vector3(DefaultPositionDayRect.x, rowPosY[r], 0f);
+            if (rowIsEvent[r])
+                FillEventButton(slot);
+        }
+
+        GameObject go = rt.gameObject;
+        if (go.activeSelf != active)
+            go.SetActive(active);
+    }
+
+    /// <summary>
+    /// ボタンに割り当てたイベントの内容を設定する。すでに同じイベントを設定済みなら何もしない
+    /// </summary>
+    private void FillEventButton(int slot)
+    {
+        int index = slotEventIndex[slot];
+        if (slotFilledIndex[slot] == index)
+            return;
+
+        slotFilledIndex[slot] = index;
+        eventButtonScripts[slot].setEventID(ids[index]);
+
+        Text buttonText = eventButtonTexts[slot];
+        if (buttonText != null)
+            buttonText.text = titles[index];
+
+        Text timeText = eventButtonTimeTexts[slot];
+        if (timeText != null)
+            timeText.text = timeStrs[index] != null ? timeStrs[index] : "";
+    }
+
+    /// <summary>
+    /// viewportの上端と高さをcontentの座標系で求めてキャッシュする(レイアウトのたびに1回だけ)
+    /// </summary>
+    private void CacheViewport()
+    {
+        RectTransform viewport = _scrollRect.viewport;
+        viewport.GetWorldCorners(worldCorners);
+
+        float y0 = Content.InverseTransformPoint(worldCorners[0]).y;
+        float y1 = Content.InverseTransformPoint(worldCorners[1]).y;
+        float top = y0 > y1 ? y0 : y1;
+        float bottom = y0 > y1 ? y1 : y0;
+
+        contentScaleY = Content.localScale.y;
+        if (contentScaleY == 0f)
+            contentScaleY = 1f;
+
+        viewHeightLocal = top - bottom;
+        viewTopInParent = Content.localPosition.y + contentScaleY * top;
+    }
+
+    /// <summary>
+    /// 見えている行だけを表示する。前回から変わった行だけを切り替える
+    /// </summary>
+    private void UpdateVisibleRows()
+    {
+        lastVisibleUpdate = Time.time;
+
+        if (rowCount == 0)
+            return;
+
+        float top = (viewTopInParent - Content.localPosition.y) / contentScaleY;
+        float bottom = top - viewHeightLocal;
+
+        //rowLo は上の行ほど大きいので、top以下になる最初の行が見え始める行
+        int lo = 0;
+        int hi = rowCount;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (rowLo[mid] <= top)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        int first = lo;
+
+        //rowHi は下の行ほど小さいので、bottom未満になる最初の行の1つ前が最後に見える行
+        lo = 0;
+        hi = rowCount;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (rowHi[mid] < bottom)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        int last = lo - 1;
+
+        int oldFirst = visFirst;
+        int oldLast = visLast;
+
+        for (int r = oldFirst; r <= oldLast; r++)
+        {
+            if (r < first || r > last)
+                SetRowActive(r, false);
+        }
+
+        for (int r = first; r <= last; r++)
+        {
+            if (r < oldFirst || r > oldLast)
+                SetRowActive(r, true);
+        }
+
+        visFirst = first;
+        visLast = last;
+    }
+
+    private void AddRow(bool isEvent, int slot, float posY, float lo, float hi)
+    {
+        rowIsEvent[rowCount] = isEvent;
+        rowSlot[rowCount] = slot;
+        rowPosY[rowCount] = posY;
+        rowLo[rowCount] = posY + lo;
+        rowHi[rowCount] = posY + hi;
+        rowCount++;
+    }
+
+    /// <summary>
     /// 分けられたデータを元にイベントのリストを作成 ボタンにIDを入れる
     /// </summary>
-    /// <param name="splitedDataList"></param>
-    /// <param name="isQuest"></param>
-    /// <param name="genrefilters"></param>
-    private void CreateButtonFromDataList(DataList splitedDataList, bool isQuest = false, DataList genrefilters = null)
+    private void CreateButtonFromDataList(DataList splitedDataList)
     {
-        //リセットする
-        ResetButton();
+        //前回の表示をリセットする
+        ResetRows();
 
         if (splitedDataList == null)
             return;
@@ -722,44 +1079,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         for (int i = 0; i < __loopCount; i++)
         {
-            if (i >= splitedDataList.Count)
-                break;
-
-            DataList dayToken = splitedDataList[i].DataList;
-            DataList IDList = (DataList)dayToken[1];
-
             __rectSizeY -= 45;
-
-            for (int j = 0; j < IDList.Count; j++)
-            {
-                string id = (string)IDList[j];
-                if (string.IsNullOrEmpty(id))
-                {
-                    continue;
-                }
-
-                int index = getIndexbyID(id);
-                if (index == -1)
-                {
-                    continue;
-                }
-
-                if (genrefilters.Count > 0)
-                {
-                    if (!checkGenre(genres[index], genrefilters))
-                    {
-                        continue;
-                    }
-                }
-
-                if (isQuest && !quests[index])
-                {
-                    continue;
-                }
-
-                __rectSizeY -= 30;
-            }
-
+            __rectSizeY -= 30 * ((DataList)splitedDataList[i].DataList[1]).Count;
             __rectSizeY -= MAX_DAYHEADER_LENGTH;
         }
 
@@ -768,64 +1089,22 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
         _scrollRect.content.sizeDelta = sizeDelta;
 
-        //日付を表示するヘッダーを10個しか用意してないので10
         for (int i = 0; i < __loopCount; i++)
         {
-            if (i >= splitedDataList.Count)
-                break;
-
-            /*
-             * DataList 
-             *      [0]
-             *       |---- 日付のデータ
-             *       |---- EventIDのリスト
-             *      [1]
-             *       |---- 日付のデータ
-             *       |---- EventIDのリスト
-            */
-
             DataList dayToken = splitedDataList[i].DataList;
             string DayStr = (string)dayToken[0];
-            DataList IDList = (DataList)dayToken[1];
+            DataList indexList = (DataList)dayToken[1];
 
-            //規定のポジションから開始
-            Vector2 dayHeaderPosition = DefaultPositionDayRect;
-
-            //高さだけ計算済みの物に置き換え
-            dayHeaderPosition.y = __rectHeight;
-
-            dayHeaders[i].localPosition = dayHeaderPosition;
+            AddRow(false, i, __rectHeight, dayRectLo[i], dayRectHi[i]);
 
             if (dayHeaderTexts[i] != null)
                 dayHeaderTexts[i].text = DayStr;
 
-            //Rect分引く
             __rectHeight -= 45;
 
-            for (int j = 0; j < IDList.Count; j++)
+            for (int j = 0; j < indexList.Count; j++)
             {
-                string id = (string)IDList[j];
-                if (string.IsNullOrEmpty(id))
-                {
-                    DebugLog($"empty id detected i = {i}, j = {j}");
-                    continue;
-                }
-
-                int index = getIndexbyID(id);
-                if (index == -1)
-                {
-                    DebugLog($"unknown id loaded {id}");
-                    continue;
-                }
-
-                if (genrefilters.Count > 0)
-                {
-                    if (!checkGenre(genres[index], genrefilters))
-                        continue;
-                }
-
-                if (isQuest && !quests[index])
-                    continue;
+                int index = indexList[j].Int;
 
                 //最大数を上回った場合はスキップ
                 if (__rectNum >= MAX_EVENT_LENGTH)
@@ -834,47 +1113,21 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     break;
                 }
 
-                //次のために追加しておく
-                RectTransform rectTransform = eventButtons[__rectNum];
-
-                if (rectTransform != null)
-                {
-                    //高さだけ計算済みの物に置き換え
-                    dayHeaderPosition.y = __rectHeight;
-
-                    rectTransform.localPosition = dayHeaderPosition;
-                }
+                AddRow(true, __rectNum, __rectHeight, eventRectLo[__rectNum], eventRectHi[__rectNum]);
+                slotEventIndex[__rectNum] = index;
 
                 __rectHeight -= 30;
-
-                eventcalendar_showcontent button = eventButtonScripts[__rectNum];
-                button.setEventID(id);
-
-                Text _ButtonText = eventButtonTexts[__rectNum];
-                if (_ButtonText != null)
-                {
-                    _ButtonText.text = titles[index];
-                }
-
-                if (eventButtonTimeTexts[__rectNum] != null)
-                {
-                    DateTime start = start_times[index];
-                    DateTime end = end_times[index];
-
-                    TimeSpan span = end - start;
-
-                    DateTime endTime = start + span;
-
-                    eventButtonTimeTexts[__rectNum].text = $"{start.ToString(FORMAT_TIME_WITHOUT_SECOND)} ~ {endTime.ToString(FORMAT_TIME_WITHOUT_SECOND)}";
-                }
-
-                eventButtons[__rectNum].gameObject.SetActive(true);
                 __rectNum++;
             }
 
             __rectHeight -= 10;
         }
-        isOverlapChecking = true;
+        usedDayCount = __loopCount;
+        usedEventCount = __rectNum;
+
+        //viewportの位置と高さを求めて、見える行を表示する(位置とテキストは表示するときに設定する)
+        CacheViewport();
+        UpdateVisibleRows();
     }
 
     /// <summary>
@@ -895,7 +1148,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         DataList splitedArr = splitArrayByDate(isQuest, genreFilters);
 
         //取得したイベントデータからボタンを作成
-        CreateButtonFromDataList(splitedArr, isQuest, genreFilters);
+        CreateButtonFromDataList(splitedArr);
     }
 
     /// <summary>
@@ -904,6 +1157,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="events">受け取ったデータ</param>
     private void DeserializeEvents(DataList events)
     {
+        inlineDetails = false;
+        lastDatePart = "";
+        lastDayStr = "";
         InitializeEventDatas(events.Count);
         for (int i = 0; i < events.Count; i++)
         {
@@ -913,70 +1169,61 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             }
             else if (events[i].TokenType == TokenType.DataDictionary)
             {
-                var dics = events[i].DataDictionary;
+                DataDictionary dic = events[i].DataDictionary;
+                DataToken t;
+                string startHM = null;
 
-                var keys = dics.GetKeys();
-                var vals = dics.GetValues();
+                //旧形式(/events: 一覧に詳細を含み、HTMLの実体参照が残っている)のときだけ文字参照を戻す
+                bool legacy = dic.ContainsKey("body");
+                if (legacy) inlineDetails = true;
 
-                for (int j = 0; j < dics.Count; j++)
+                if (dic.TryGetValue("id", out t) && t.TokenType == TokenType.String) ids[i] = t.String;
+                if (dic.TryGetValue("title", out t) && t.TokenType == TokenType.String) titles[i] = legacy ? ReplaceCharacterReference(t.String) : t.String;
+                if (dic.TryGetValue("author", out t) && t.TokenType == TokenType.String) authors[i] = t.String;
+                if (dic.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[i] = t.String;
+                if (dic.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[i] = ReplaceCharacterReference(t.String);
+                if (dic.TryGetValue("quest", out t) && t.TokenType == TokenType.Boolean) quests[i] = t.Boolean;
+                if (dic.TryGetValue("genres", out t) && t.TokenType == TokenType.DataList) genres[i] = t.DataList;
+
+                if (dic.TryGetValue("start", out t) && t.TokenType == TokenType.String)
                 {
-                    var key = keys[j];
-                    var val = vals[j];
-
-                    if (val.TokenType == TokenType.String)
+                    if (GetTimeFromStr(t.String, out DateTime _start))
                     {
-                        if (key.String == "id") ids[i] = val.String;
-                        else if (key.String == "title") titles[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "author") authors[i] = val.String;
-                        else if (key.String == "body") bodys[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "condition") conditions[i] = val.String;
-                        else if (key.String == "way") ways[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "note") notes[i] = ReplaceCharacterReference(val.String);
-                        else if (key.String == "start")
+                        start_times[i] = _start;
+
+                        //同じ日付が続く間は、前回作った日付の表示文字列を再利用する
+                        string datePart = t.String.Substring(0, 10);
+                        if (datePart != lastDatePart)
                         {
-                            string starttime = val.String;
-
-                            GetTimeFromStr(starttime, out DateTime _start);
-                            if (_start == null)
-                            {
-                                DebugLog($"<color=red>Get Time Error start[{j}]</color>");
-                                continue;
-                            }
-
-                            start_times[i] = _start;
+                            lastDatePart = datePart;
+                            lastDayStr = datePart + " (" + weekdayNames[(int)_start.DayOfWeek] + ")";
                         }
-                        else if (key.String == "end")
-                        {
-                            string endtime = val.String;
-                            GetTimeFromStr(endtime, out DateTime _end);
-                            if (_end == null)
-                            {
-                                DebugLog($"<color=red>Get Time Error end[{j}]</color>");
-                                continue;
-                            }
 
-                            end_times[i] = _end;
-                        }
+                        dayStrs[i] = lastDayStr;
+                        startHM = t.String.Substring(11, 5);
                     }
-                    else if (val.TokenType == TokenType.DataList) //genres用
+                    else
                     {
-                        if (key.String == "genres")
-                        {
-                            genres[i] = val.DataList;
-                        }
-                        else
-                        {
-                            DebugLog($"Unknown DataList detected {j}");
-                        }
-                    }
-                    else if (val.TokenType == TokenType.Boolean)
-                    {
-                        if (key.String == "quest")
-                        {
-                            quests[i] = val.Boolean;
-                        }
+                        DebugLog($"<color=red>Get Time Error start[{i}]</color>");
                     }
                 }
+
+                if (dic.TryGetValue("end", out t) && t.TokenType == TokenType.String)
+                {
+                    if (GetTimeFromStr(t.String, out DateTime _end))
+                    {
+                        end_times[i] = _end;
+                        if (startHM != null)
+                            timeStrs[i] = startHM + " ~ " + t.String.Substring(11, 5);
+                    }
+                    else
+                        DebugLog($"<color=red>Get Time Error end[{i}]</color>");
+                }
+
+                if (genres[i] == null)
+                    genres[i] = new DataList();
             }
         }
 
@@ -1000,6 +1247,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         }
 
         checkboxLen = genres_filterlist.Count;
+        if (checkboxLen > MAX_GENRE_LENGTH)
+            checkboxLen = MAX_GENRE_LENGTH;
         for (int i = 0; i < checkboxLen; i++)
         {
             string genreName = (string)genres_filterlist[i];
@@ -1038,7 +1287,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         genres_eventcount = _genres.GetValues();
         //genres_filterToggle = new bool[genres_filterlist.Count];
 
-        for (int i = 0; i < genres_filterlist.Count; i++)
+        for (int i = 0; i < genres_filterlist.Count && i < MAX_GENRE_LENGTH; i++)
         {
             string genreName = (string)genres_filterlist[i];
             string genreCount = ((double)genres_eventcount[i]).ToString();
@@ -1065,6 +1314,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="json"></param>
     private void DeserializeJson(string json)
     {
+        isReloading = true;
+
         if (VRCJson.TryDeserializeFromJson(json, out DataToken result))
         {
             //だいたいDictionaryで返ってくる
@@ -1075,11 +1326,19 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
                 int __genreCount = 0, __eventCount = 0;
 
+                //表示を作り直すので詳細ボックスは閉じる
+                closeContentBox();
+
                 for (int i = 0; i < __keys.Count; i++)
                 {
                     if (__keys[i].TokenType == TokenType.String)
                     {
                         var val = __vals[i];
+                        if (__keys[i].String == "version")
+                        {
+                            listVersion = val.TokenType == TokenType.String ? val.String : val.ToString();
+                        }
+
                         if (__keys[i].String == "genres" && val.TokenType == TokenType.DataDictionary)
                         {
                             DataDictionary _genres = val.DataDictionary;
@@ -1100,6 +1359,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
                     }
                 }
 
+                lastJson = json;
+                hasData = true;
                 DebugLog($"Json load success! Genre[{__genreCount}] Event[{__eventCount}]");
             }
             else
@@ -1130,8 +1391,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         hasHeaderLoadError = false;
 
         //受け取ったテクスチャをマテリアルへ反映
+        //(一度非表示にしないとマテリアルが反映されなかった経緯があるため、確認できるまで残す)
+        HeaderImage.SetActive(false);
         mat_header.mainTexture = result.Result;
         cacheTexture = result.Result;
+        HeaderImage.SetActive(true);
     }
 
     /// <summary>
@@ -1155,10 +1419,31 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnStringLoadSuccess(IVRCStringDownload result)
     {
-        hasJsonError = false;
+        if (IsDetailsUrl(result))
+        {
+            OnDetailsLoaded(result.Result);
+            return;
+        }
 
-        if (!string.IsNullOrEmpty(result.Result))
-            DeserializeJson(result.Result);
+        listLoading = false;
+
+        if (string.IsNullOrEmpty(result.Result))
+        {
+            OnReloadFailed();
+            return;
+        }
+
+        hasJsonError = false;
+        failCount = 0;
+
+        //前回と同じ内容なら作り直さない(スクロール位置・フィルタも保たれる)
+        if (hasData && result.Result == lastJson)
+        {
+            NOWLOADING.SetActive(false);
+            return;
+        }
+
+        DeserializeJson(result.Result);
     }
 
     /// <summary>
@@ -1167,9 +1452,166 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     /// <param name="result"></param>
     public override void OnStringLoadError(IVRCStringDownload result)
     {
-        hasJsonError = true;
         DebugError(result.Error);
         DebugError(result.ErrorCode.ToString());
+
+        if (IsDetailsUrl(result))
+        {
+            OnDetailsFailed();
+            return;
+        }
+
+        listLoading = false;
+        OnReloadFailed();
+    }
+
+    #region Details
+    private bool HasDetailsUrl()
+    {
+        return url_details != null && !string.IsNullOrEmpty(url_details.Get());
+    }
+
+    /// <summary>
+    /// 一覧に詳細が含まれていない新形式で、詳細URLが設定されている場合はTrue
+    /// </summary>
+    private bool NeedsDetailFetch()
+    {
+        return !inlineDetails && HasDetailsUrl();
+    }
+
+    private bool IsDetailsUrl(IVRCStringDownload result)
+    {
+        return HasDetailsUrl() && result.Url != null && result.Url.Get() == url_details.Get();
+    }
+
+    /// <summary>
+    /// 一覧・詳細のどちらも取得中ではなく、直前の取得から5秒以上あいていればTrue
+    /// </summary>
+    private bool CanLoadString()
+    {
+        return !listLoading && !detailsLoading && Time.time - lastStringLoadTime >= STRING_LOAD_GAP;
+    }
+
+    private void TryDispatchDetails()
+    {
+        if (!pendingDetailsRequest || Time.time < nextDetailsAllowed || !CanLoadString())
+            return;
+
+        pendingDetailsRequest = false;
+        detailsLoading = true;
+        lastStringLoadTime = Time.time;
+        VRCStringDownloader.LoadUrl(url_details, Receiver);
+    }
+
+    /// <summary>
+    /// 取得済みの詳細からindexのイベントの詳細を反映する。詳細にそのIDが無ければfalse
+    /// </summary>
+    private bool ApplyDetails(int index)
+    {
+        if (detailsDict == null || ids[index] == null)
+            return false;
+
+        DataToken entry;
+        if (!detailsDict.TryGetValue(ids[index], out entry) || entry.TokenType != TokenType.DataDictionary)
+            return false;
+
+        DataDictionary d = entry.DataDictionary;
+        DataToken t;
+        if (d.TryGetValue("body", out t) && t.TokenType == TokenType.String) bodys[index] = t.String;
+        if (d.TryGetValue("condition", out t) && t.TokenType == TokenType.String) conditions[index] = t.String;
+        if (d.TryGetValue("way", out t) && t.TokenType == TokenType.String) ways[index] = t.String;
+        if (d.TryGetValue("note", out t) && t.TokenType == TokenType.String) notes[index] = t.String;
+        return true;
+    }
+
+    private void OnDetailsLoaded(string json)
+    {
+        detailsLoading = false;
+
+        DataToken root;
+        DataToken detailsToken;
+        if (string.IsNullOrEmpty(json)
+            || !VRCJson.TryDeserializeFromJson(json, out root)
+            || root.TokenType != TokenType.DataDictionary
+            || !root.DataDictionary.TryGetValue("details", out detailsToken)
+            || detailsToken.TokenType != TokenType.DataDictionary)
+        {
+            OnDetailsFailed();
+            return;
+        }
+
+        detailFailCount = 0;
+        detailsDict = detailsToken.DataDictionary;
+
+        DataToken versionToken;
+        detailsVersion = root.DataDictionary.TryGetValue("version", out versionToken)
+            ? (versionToken.TokenType == TokenType.String ? versionToken.String : versionToken.ToString())
+            : "";
+
+        //詳細の方が一覧と違うversionなら、次の機会に一覧を取り直す(一度だけ)
+        bool versionDiffers = detailsVersion != "" && listVersion != "" && detailsVersion != listVersion;
+        if (versionDiffers && listRefetchFor != detailsVersion)
+        {
+            listRefetchFor = detailsVersion;
+            nextEventsTicks = TicksAfter(STRING_LOAD_GAP);
+        }
+
+        //詳細ボックスを開いている場合は描き直す
+        if (drawnIndex >= 0 && ContentImage != null && ContentImage.activeSelf)
+        {
+            if (ApplyDetails(drawnIndex))
+            {
+                pendingDetailId = null;
+                DrawContent(drawnIndex, null);
+            }
+            else if (pendingDetailId != null)
+            {
+                pendingDetailId = null;
+                DrawContent(drawnIndex, "更新中です。しばらくしてからもう一度開いてください");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 詳細の取得に失敗した場合: 30秒→60秒→…→最大300秒空けて再試行できるようにする
+    /// </summary>
+    private void OnDetailsFailed()
+    {
+        detailsLoading = false;
+        detailFailCount++;
+
+        float wait = 30f * Mathf.Pow(2f, detailFailCount - 1);
+        if (wait > 300f)
+            wait = 300f;
+        nextDetailsAllowed = Time.time + wait;
+
+        if (pendingDetailId != null && drawnIndex >= 0 && ContentImage != null && ContentImage.activeSelf)
+        {
+            pendingDetailId = null;
+            DrawContent(drawnIndex, "読み込みに失敗しました。しばらくしてからもう一度開いてください");
+        }
+    }
+    #endregion
+
+    /// <summary>
+    /// 取得失敗時: 取得済みの表示は残し、30秒→60秒→…→最大300秒の間隔で再試行する
+    /// </summary>
+    private void OnReloadFailed()
+    {
+        failCount++;
+        hasJsonError = !hasData;
+        eventsDue = true;
+
+        float retry = 30f * Mathf.Pow(2f, failCount - 1);
+        if (retry > 300f)
+            retry = 300f;
+
+        currentTime = 0f;
+        reloadInterval = retry;
+
+        //データがある場合は古い表示のまま、無い場合はローディングを残して再試行を待つ
+        if (hasData)
+            NOWLOADING.SetActive(false);
     }
     #endregion
 
@@ -1194,22 +1636,48 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
         }
 
+        //詳細を別に取得する形式の場合、まだ詳細が無ければ取得してから描画する
+        if (NeedsDetailFetch())
+        {
+            if (!ApplyDetails(index))
+            {
+                pendingDetailId = id;
+                pendingDetailsRequest = true;
+                DrawContent(index, "読み込み中...");
+                TryDispatchDetails();
+                return;
+            }
+
+            //一覧より古いversionの詳細だった場合は、表示したうえで裏で一度だけ取り直す
+            if (listVersion != "" && detailsVersion != listVersion && detailsRefreshedFor != listVersion)
+            {
+                detailsRefreshedFor = listVersion;
+                pendingDetailsRequest = true;
+            }
+        }
+
+        DrawContent(index, null);
+    }
+
+    /// <summary>
+    /// indexのイベントの詳細ボックスを描画する。bodyMessageが指定されている場合は説明文の代わりに表示する
+    /// </summary>
+    private void DrawContent(int index, string bodyMessage)
+    {
+        drawnIndex = index;
+
         //一番上から表示したいので、イベントの詳細表示のボックスの位置を一番上に
         if (contentPanelRect != null)
             contentPanelRect.localPosition = new Vector3(0, 0, 0);
 
-        DateTime start = start_times[index];
-        DateTime end = end_times[index];
-
         //開催日
-        string startStr = DateTimeToString(start);
-        _Day.text = startStr;
+        _Day.text = dayStrs[index];
 
         //開催時間と終了時間を記載
-        _Time.text = $"{start.ToString(FORMAT_TIME_WITHOUT_SECOND)} ~ {end.ToString(FORMAT_TIME_WITHOUT_SECOND)}";
+        _Time.text = timeStrs[index];
 
         //Title
-        _Title.text = $"<b>{titles[index]}</b>";
+        _Title.text = titles[index]; //太字はTextのFont Styleで指定している
 
         //対応プラットフォームを記載
         _Quest.text = quests[index] ? "PC, Android" : "PC";
@@ -1218,10 +1686,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         _Author.text = authors[index];
 
         //説明文を記載
-        _Body.text = bodys[index];
+        _Body.text = bodyMessage != null ? bodyMessage : bodys[index];
 
         //イベントのジャンルを記載
-        _Genre.text = "";
+        string genreText = "";
         for (int genreIndex = 0; genreIndex < genres[index].Count; genreIndex++)
         {
             if (genres[index][genreIndex].TokenType != TokenType.String)
@@ -1231,12 +1699,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
 
             if (!string.IsNullOrEmpty(_genre))
             {
-                _Genre.text = _Genre.text + _genre;
+                genreText = genreText + _genre;
 
                 if (genreIndex != genres[index].Count - 1)
-                    _Genre.text = _Genre.text + ", ";
+                    genreText = genreText + ", ";
             }
         }
+        _Genre.text = genreText;
 
         //参加条件やモラルを記載
         _Conditions.text = conditions[index];
@@ -1263,6 +1732,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     {
         if (ContentImage == null || !ContentImage.activeSelf)
             return;
+
+        //取得待ちの詳細は取り消す(取得済みの詳細は残す)
+        pendingDetailId = null;
+        pendingDetailsRequest = false;
+        drawnIndex = -1;
 
         //イベントの詳細情報のボックスを非表示
         ContentImage.SetActive(false);
@@ -1317,6 +1791,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             dayHeaders[i] = dayHeaderRectTransform;
             dayHeaders[i].localPosition = dayHeaderPosition;
 
+            float dayScaleY = dayHeaderRectTransform.localScale.y;
+            dayRectLo[i] = dayHeaderRectTransform.rect.yMin * dayScaleY;
+            dayRectHi[i] = dayHeaderRectTransform.rect.yMax * dayScaleY;
+
             dayHeaderTexts[i] = dayHeaderRectTransform.GetComponentInChildren<Text>();
         }
 
@@ -1332,6 +1810,10 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             RectTransform buttonRectTransform = buttonTransform.GetComponent<RectTransform>();
             eventButtons[i] = buttonRectTransform;
             eventButtons[i].localPosition = dayHeaderPosition;
+
+            float eventScaleY = buttonRectTransform.localScale.y;
+            eventRectLo[i] = buttonRectTransform.rect.yMin * eventScaleY;
+            eventRectHi[i] = buttonRectTransform.rect.yMax * eventScaleY;
 
             eventButtonTexts[i] = buttonRectTransform.Find("Button/Text").GetComponent<Text>();
             eventButtonTimeTexts[i] = buttonRectTransform.Find("TimeRect/TimeText").GetComponent<Text>();
@@ -1414,8 +1896,11 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             return;
         }
 
-        for (int i = 0; i < genres_filterlist.Count; i++)
+        for (int i = 0; i < genres_filterlist.Count && i < MAX_GENRE_LENGTH; i++)
         {
+            if (checkboxes[i] == null)
+                continue;
+
             checkboxes[i].toggleisON(false);
         }
 
@@ -1429,17 +1914,39 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
     #region uGUI Func
     public void ViewScrolled()
     {
-        isOverlapChecking = true;
+        if (rowCount == 0)
+            return;
+
+        //スクロールに追従しつつ、更新は0.1秒に1回までにする
+        if (Time.time - lastVisibleUpdate >= VISIBLE_UPDATE_INTERVAL)
+        {
+            UpdateVisibleRows();
+        }
+        else if (!visibleUpdatePending)
+        {
+            visibleUpdatePending = true;
+            SendCustomEventDelayedSeconds(nameof(DelayedVisibleUpdate), VISIBLE_UPDATE_INTERVAL, VRC.Udon.Common.Enums.EventTiming.Update);
+        }
+    }
+
+    public void DelayedVisibleUpdate()
+    {
+        visibleUpdatePending = false;
+        UpdateVisibleRows();
     }
     #endregion
 
     #region CharacterReference
     private string ReplaceCharacterReference(string text)
     {
-        text = text.Replace("&amp;", "&");
+        if (text.IndexOf('&') < 0)
+            return text;
+
         text = text.Replace("&copy;", "©");
+        //表示するTextはリッチテキストをオフにしているので、'<' '>' はそのまま戻してよい
         text = text.Replace("&lt;", "<");
         text = text.Replace("&gt;", ">");
+        text = text.Replace("&amp;", "&");
 
         return text;
     }
@@ -1454,6 +1961,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private Texture inspectorLogoTex;
 
         private SerializedProperty _reloadInterval;
+        private SerializedProperty _useActiveRange;
+        private SerializedProperty _activeRange;
         private SerializedProperty _NOWLOADING;
         private SerializedProperty _HeaderImage;
         private SerializedProperty _ContentImage;
@@ -1461,6 +1970,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private SerializedProperty _mat_header;
         private SerializedProperty _url_header;
         private SerializedProperty _url_json;
+        private SerializedProperty _url_details;
         private SerializedProperty _Content;
         private SerializedProperty _Receiver;
         private SerializedProperty _ScrollRect;
@@ -1474,6 +1984,8 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
         private void OnEnable()
         {
             _reloadInterval = serializedObject.FindProperty(nameof(reloadInterval));
+            _useActiveRange = serializedObject.FindProperty(nameof(useActiveRange));
+            _activeRange = serializedObject.FindProperty(nameof(activeRange));
             _NOWLOADING = serializedObject.FindProperty(nameof(NOWLOADING));
             _HeaderImage = serializedObject.FindProperty(nameof(HeaderImage));
             _ContentImage = serializedObject.FindProperty(nameof(ContentImage));
@@ -1481,6 +1993,7 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             _mat_header = serializedObject.FindProperty(nameof(mat_header));
             _url_header = serializedObject.FindProperty(nameof(url_header));
             _url_json = serializedObject.FindProperty(nameof(url_json));
+            _url_details = serializedObject.FindProperty(nameof(url_details));
             _Content = serializedObject.FindProperty(nameof(Content));
             _Receiver = serializedObject.FindProperty(nameof(Receiver));
             _ScrollRect = serializedObject.FindProperty(nameof(_scrollRect));
@@ -1537,6 +2050,13 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.LabelField("初回読み込み以降は300に固定されます", EditorStyles.helpBox);
             EditorGUILayout.PropertyField(_reloadInterval, new GUIContent("読み込みインターバル"), true);
 
+            EditorGUILayout.PropertyField(_useActiveRange, new GUIContent("範囲内でのみ更新する"), true);
+            if (_useActiveRange.boolValue)
+            {
+                EditorGUILayout.LabelField("最初の1回は必ず読み込み、その後はこのオブジェクトの位置から範囲内にいる間だけ更新します(Quest等の負荷軽減)。初期値は ON / 5m です", EditorStyles.helpBox);
+                EditorGUILayout.PropertyField(_activeRange, new GUIContent("範囲(メートル)"), true);
+            }
+
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
             EditorGUILayout.Space();
@@ -1562,7 +2082,9 @@ public class cuckoo_VRChatEventCalendar_v3 : UdonSharpBehaviour
             EditorGUILayout.LabelField("URLs", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             EditorGUILayout.PropertyField(_url_header, new GUIContent("Header Image URL"), true);
-            EditorGUILayout.PropertyField(_url_json, new GUIContent("Json URL"), true);
+            EditorGUILayout.PropertyField(_url_json, new GUIContent("Json URL (一覧)"), true);
+            EditorGUILayout.PropertyField(_url_details, new GUIContent("Details URL (詳細)"), true);
+            EditorGUILayout.LabelField("Details URL が空の場合は、Json URL に含まれる詳細(旧形式)をそのまま使います", EditorStyles.helpBox);
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();
