@@ -35,15 +35,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       
-      - uses: actions/checkout@v4 # check out this repo
-      - uses: actions/checkout@v4 # check out automation repo
+      - uses: actions/checkout@v7 # check out this repo
+      - uses: actions/checkout@v7 # check out automation repo
         with:
           repository: vrchat-community/package-list-action
           path: ${{env.pathToCi}}
           clean: false # otherwise the local repo will no longer be checked out
           
       - name: Restore Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{env.pathToCi}}/.nuke/temp
@@ -56,13 +56,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
  
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ${{env.listPublishDirectory}}
           
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

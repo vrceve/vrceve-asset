@@ -15,14 +15,13 @@ jobs:
     steps:
     
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
     
       - name: get version
         id: version
-        uses: notiz-dev/github-action-json-property@7c8cf5cc36eb85d8d287a8086a39dac59628eb31
-        with: 
-            path: "Packages/${{env.packageName}}/package.json"
-            prop_path: "version"
+        run: |
+          version=$(jq -er .version "Packages/${{env.packageName}}/package.json")
+          echo "prop=$version" >> "$GITHUB_OUTPUT"
     
       - name: Set Environment Variables
         run: |
@@ -30,23 +29,20 @@ jobs:
           echo "unityPackage=${{ env.packageName }}-${{ steps.version.outputs.prop }}.unitypackage" >> $GITHUB_ENV
         
       - name: Create Zip
-        uses: thedoctor0/zip-release@09336613be18a8208dfa66bd57efafd9e2685657
-        with:
-          type: "zip"
-          directory: "Packages/${{env.packageName}}/"
-          filename: "../../${{env.zipFile}}" # make the zip file two directories up, since we start two directories in above
+        working-directory: "Packages/${{env.packageName}}"
+        run: zip -r "${{ github.workspace }}/${{env.zipFile}}" . # zip the package contents so package.json is at the zip root
           
       - run: find "Packages/${{env.packageName}}/" -name \*.meta >> metaList
           
       - name: Create UnityPackage
-        uses: pCYSl5EDgo/create-unitypackage@cfcd3cf0391a5ef1306342794866a9897c32af0b
+        uses: pCYSl5EDgo/create-unitypackage@b5c57408698b1fab8b3a84d4b67f767b8b7c0be9 # v1.2.3
         with:
           package-path: ${{ env.unityPackage }}
           include-files: metaList
         
         
       - name: Make Release
-        uses: softprops/action-gh-release@1e07f4398721186383de40550babbdf2b84acfc5
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ steps.version.outputs.prop }}
           files: |
